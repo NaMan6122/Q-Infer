@@ -9,24 +9,22 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | ID | Task | Rev. | Milestone | Status |
 |---|---|---|---|---|
 | T-001 | `cfp@1` schema as Rust types + validation | LOW | M0 | **DONE** — PR #1, 3 Critic rounds |
-| T-002 | Bandwidth probe: thread sweep + pressure guard | MEDIUM | M0 | IN PROGRESS — merged #2, awaiting verification |
-| T-003 | macOS collectors with the documented traps | HIGH | M0 | IN PROGRESS — merged #5, awaiting verification |
+| T-002 | Bandwidth probe: thread sweep + pressure guard | MEDIUM | M0 | **DONE** — merged #2, verified 7/7 |
+| T-003 | macOS collectors with the documented traps | HIGH | M0 | **DONE** — merged #5, verified 6/6 |
 | T-004 | Catalog v1 — 12 entries, arch coverage | HIGH | M0 | READY — next |
-| T-005 | Predictor + `k_cal` store | MEDIUM | M0 | IN PROGRESS — merged #6, awaiting verification |
+| T-005 | Predictor + `k_cal` store | MEDIUM | M0 | **DONE** — merged #6, verified 8/8 |
 | T-006 | Planner: constraint solver + rationale | LOW | M0 | READY |
 | T-007 | CLI: `detect`, `plan`, `--json`, exit codes | HIGH | M0 | READY |
 | T-008 | TUI wired to core (not spike JSON) | HIGH | M0 | READY |
 | T-009 | Spec structural validator (mechanises G1) | HIGH | M0 | READY |
 | T-010 | Second spike: MoE + CUDA | HIGH | M0 | BLOCKED — hardware |
 
-**Review state.** T-001 and T-002 are implemented with tests green; neither is `DONE` until an independent Verification packet exists and (for T-001, `LOW` reversibility) the Critic signs off.
+**Review state.** T-001 cleared three Critic rounds (`BLOCK`, `BLOCK`, `PASS-WITH-CHANGES`). T-002/T-003/T-005 cleared independent verification: 23 tests written by a separate agent against the acceptance criteria, fixtures deliberately different from the implementers' (an M4 Max rather than the M5 Pro), **all criteria VERIFIED, no behavioural defect found**.
 
-**PR stack** — merge bottom-up:
+Verification raised four non-blocking findings; all four were fixed rather than filed:
+`reps` echoing the requested count instead of the effective one; `parse_gpu` discarding the whole record on one odd field type; `predict` publishing a positive throughput from a 0 GB/s probe; and a doc comment that derived the 4-bit arithmetic next to the 8-bit constant.
 
-```
-#1  feat/m0-advisor  →  main            T-001 cfp@1 validation
-#2  feat/m0-probe    →  feat/m0-advisor T-002 bandwidth probe   (depends on #1)
-```
+**Merged** (all six PRs are on `main`): #1 T-001 · #2 T-002 · #3 records · #4 ratification · #5 T-003 · #6 T-005 · #7 records.
 
 ---
 
