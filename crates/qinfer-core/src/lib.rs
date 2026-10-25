@@ -8,10 +8,12 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub mod catalog;
 pub mod cfp;
 pub mod collect;
 pub mod predict;
 pub mod probe;
+pub use catalog::{Artifact, Catalog, CatalogEntry, CatalogViolation, Coverage, ByteSource, ModelMeta};
 pub use cfp::{parse_major, Violation, MAX_SPREAD_PCT, SUPPORTED_MAJOR};
 pub use predict::{Calibration, KvGeometry, Observation, Prediction, ShapeClass};
 pub use probe::{probe, ProbeConfig, ProbeError, ProbeResult};
