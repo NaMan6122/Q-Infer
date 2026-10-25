@@ -244,14 +244,22 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         .map(|fp| fp.cpu.brand.clone())
         .unwrap_or_else(|| "no machine".into());
 
-    let tier = if app.ws.has_data() { "Tier A (certified)" } else { "unknown" };
+    // ADR-0002: never show a confident default. Certification now requires the
+    // fingerprint to have passed validation, not merely to exist.
+    let (tier, tier_colour) = if app.ws.is_trusted() {
+        ("Tier A (certified)", Color::Green)
+    } else if app.ws.has_data() {
+        ("unverified — see Verdict", Color::Yellow)
+    } else {
+        ("no data", Color::DarkGray)
+    };
 
     let title = Line::from(vec![
         Span::styled(" Q-Infer ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
         Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
         Span::raw("  ·  "),
-        Span::styled(tier, Style::default().fg(Color::Green)),
+        Span::styled(tier, Style::default().fg(tier_colour)),
     ]);
 
     let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray));
@@ -415,7 +423,7 @@ fn render_bandwidth(f: &mut Frame, fp: &Fingerprint, area: Rect) {
     f.render_widget(block, area);
 
     let sat = fp.saturated_gbs();
-    let st = fp.single_thread_gbs().unwrap_or(sat);
+    let st = fp.single_thread_gbs();
     let gain = fp.thread_gain().unwrap_or(1.0);
     let bar_w = (inner.width as usize).saturating_sub(34).clamp(6, 40);
     let show_gain = inner.width >= 84;
@@ -455,6 +463,28 @@ fn render_headline(f: &mut Frame, app: &App, fp: &Fingerprint, area: Rect) {
     f.render_widget(block, area);
 
     let mut lines = Vec::new();
+
+    // Violations come first: they invalidate everything below them.
+    if !app.ws.violations.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!(" ⚠ {} validation violation(s) — this fingerprint is NOT trusted:", app.ws.violations.len()),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+        for v in app.ws.violations.iter().take(3) {
+            lines.push(Line::from(Span::styled(
+                format!("   {}  {}", v.code(), truncate(&v.to_string(), inner.width as usize - 10)),
+                Style::default().fg(Color::Red),
+            )));
+        }
+        if app.ws.violations.len() > 3 {
+            lines.push(Line::from(Span::styled(
+                format!("   … and {} more", app.ws.violations.len() - 3),
+                Style::default().fg(Color::Red),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
     if fp.memory_pressured() {
         lines.push(Line::from(Span::styled(
             "⚠  This machine is swapping heavily. Bandwidth figures are unreliable,",
