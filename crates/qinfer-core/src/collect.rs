@@ -128,9 +128,11 @@ pub mod macos {
     struct Display {
         #[serde(default)]
         sppci_model: Option<String>,
-        /// A *string* in the plist, e.g. "16". Parsing it as u32 fails silently.
+        /// A *string* in the plist, e.g. "16", but treated as an opaque value:
+        /// one unexpected type must not discard the whole GPU record
+        /// (verification finding 2).
         #[serde(default)]
-        sppci_cores: Option<String>,
+        sppci_cores: Option<serde_json::Value>,
         #[serde(default)]
         spdisplays_mtlgpufamilysupport: Option<String>,
         #[serde(default)]
@@ -144,9 +146,16 @@ pub mod macos {
         let Some(e) = report.entries.into_iter().next() else {
             return Gpu::default();
         };
+        // Coerce rather than require a single type: a numeric `sppci_cores`
+        // must still yield the model name, not an empty GPU record.
+        let cores = e.sppci_cores.and_then(|v| match v {
+            serde_json::Value::String(s) => s.trim().parse::<u32>().ok(),
+            serde_json::Value::Number(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
+            _ => None,
+        });
         Gpu {
             model: e.sppci_model,
-            cores: e.sppci_cores.and_then(|c| c.trim().parse().ok()),
+            cores,
             metal_support: e.spdisplays_mtlgpufamilysupport,
             vendor: e.sppci_vendor,
             unified_memory: true,

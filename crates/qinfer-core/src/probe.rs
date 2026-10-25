@@ -109,6 +109,12 @@ pub fn probe(cfg: &ProbeConfig) -> ProbeResult {
     counts.sort_unstable();
     counts.dedup();
 
+    // Echo the *effective* repetition count, not the requested one: a config
+    // with `reps: 0` still takes one sample, and reporting 0 in the receipt
+    // would make "best of N" indistinguishable from "measured once"
+    // (verification finding 3).
+    let reps = cfg.reps.max(1);
+
     let mut sweep: BTreeMap<usize, f64> = BTreeMap::new();
     let mut single_samples: Vec<f64> = Vec::new();
     let mut best_samples: Vec<f64> = Vec::new();
@@ -119,7 +125,7 @@ pub fn probe(cfg: &ProbeConfig) -> ProbeResult {
         // Warm-up, discarded: first touch pays page faults that are not steady-state.
         copy_chunked(&src, &mut dst, threads);
 
-        for _ in 0..cfg.reps.max(1) {
+        for _ in 0..reps {
             let t0 = Instant::now();
             copy_chunked(&src, &mut dst, threads);
             let dt = t0.elapsed().as_secs_f64();
@@ -169,7 +175,7 @@ pub fn probe(cfg: &ProbeConfig) -> ProbeResult {
         sweep,
         spread_pct,
         buffer_bytes: cfg.buffer_bytes,
-        reps: cfg.reps,
+        reps,
     }
 }
 
