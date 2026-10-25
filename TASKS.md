@@ -23,13 +23,18 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 
 ## T-001 — `cfp@1` schema as Rust types + validation
 
-**Acceptance criteria**
-- *Given* a valid fingerprint JSON, *when* deserialised and re-serialised, *then* the result is byte-identical modulo key order.
-- *Given* `saturated_gbs < single_thread_gbs`, *when* validated, *then* it is rejected as corrupt.
-- *Given* `spread_pct > 15` with `provenance.bandwidth == "measured"`, *when* validated, *then* it is rejected or downgraded.
-- *Given* an unknown `schema` major, *when* loaded, *then* the reader refuses rather than guessing.
+**Acceptance criteria** — revised after Critic review (v0.2). The original roundtrip criterion was unimplementable (no `Serialize`, lossy fields) and is struck.
 
-**Test Evidence:** `crates/qinfer-core/src/lib.rs` unit tests + `tests/cfp_roundtrip.rs`
+- *Given* the committed reference fingerprint (`spikes/m0/fingerprint.json`), *when* deserialised, *then* it is **rejected** with `E-DET-002` and `E-DET-003`. *(The Critic's "most important missing test": the one real artefact in the repo is not trustworthy.)*
+- *Given* `saturated_gbs <= single_thread_gbs` on a multi-threaded sweep, *when* validated, *then* it is rejected — equality is the "sweep never ran" case.
+- *Given* a headline taken from `triad` and a `copy` single-thread figure, *when* validated, *then* no ordering violation fires. *(Cross-method comparison is a guaranteed false positive.)*
+- *Given* any sample with `spread_pct > 15` or `NaN`, *when* provenance claims `measured`, *then* it is rejected — `copy` and `triad` are both checked.
+- *Given* a missing or unrecognised `provenance.bandwidth`, *when* validated, *then* it is rejected. *(Fails closed; a missing key previously passed.)*
+- *Given* swap headroom below 10%, *when* provenance claims `measured`, *then* it is rejected. *(Headroom, not swap-used-vs-RAM: the reference host sat at 48.1% of RAM while swap was 96.3% full.)*
+- *Given* `single_thread_gbs` absent, *when* deserialised, *then* it fails — the field is required, not optional.
+- *Given* any consumer, *when* it needs trustworthy facts, *then* it must accept `&Validated<Fingerprint>`; an unvalidated fingerprint cannot reach the planner.
+
+**Test Evidence:** `crates/qinfer-core/src/cfp.rs` — **34 tests**, incl. the committed-artefact regression, headline corroboration, and the sealed `Validated` type. `cargo test -p qinfer-core` on this branch → **37 passed + 1 `compile_fail` doctest**; on the full stack → **59 passed**.
 **Rollback:** additive module; delete `cfp.rs`, no migration.
 
 ---
