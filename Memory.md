@@ -6,9 +6,9 @@
 
 | Field | Value |
 |---|---|
-| Phase | M0 — Advisor. **IN PROGRESS**; T-001 and T-002 implemented, both in review. |
-| Last file touched | `crates/qinfer-core/src/probe.rs` (commit `e087840`) |
-| Immediate next step | T-003 macOS collectors — or apply Critic changes to T-001 if it blocks |
+| Phase | M0 — Advisor. **IN PROGRESS**; T-001 reworked after `BLOCK`, T-002 in review. |
+| Last file touched | `crates/qinfer-core/src/cfp.rs` (commit `73563e5`) |
+| Immediate next step | Re-submit T-001 to the Critic for a second verdict, then T-003 |
 | Open questions | OQ-01…OQ-04 (`init-charter.md` §8) — non-blocking; `instruction.md` v5 pending one-time human ratification |
 | Verification bar | `SIGNIFICANT` tasks require unit tests **and** a simulation harness (§7) |
 | Relay | none |
@@ -39,6 +39,9 @@
 | D-08 | Protocol consolidated into `instruction.md` v5; inferred v4 clauses marked `⚠R` | MEDIUM | awaiting one-time ratification |
 | D-09 | PRs are **stacked**: each branch bases on its parent, not `main` | HIGH | OQ-05 (needs §11 amendment) |
 | D-10 | Rust probe reproduces the Python finding (126.9 → 259.0 GB/s, 2.04×) | HIGH | `e087840`, example output |
+| D-11 | Validation is enforced by a `Validated<T>` newtype, not a voluntary call | LOW | Critic finding 1; `73563e5` |
+| D-12 | Pressure is swap **headroom** (<10% free), not swap-used-vs-RAM | MEDIUM | Critic counterexample 1; `73563e5` |
+| D-13 | Ordering invariants compare like methods only (`headline_method`) | MEDIUM | Critic finding 2; `73563e5` |
 
 ## Open questions (queued, non-blocking)
 
@@ -68,6 +71,9 @@ _none_
 | 2026-10-26 | PR **#1** opened: `feat/m0-advisor` → `main` |
 | 2026-10-26 | T-002 bandwidth probe implemented (`e087840`), 19 tests green |
 | 2026-10-26 | PR **#2** opened stacked on #1: `feat/m0-probe` → `feat/m0-advisor` |
+| 2026-10-26 | Critic returned **BLOCK** on T-001 — 8 required findings, all valid |
+| 2026-10-26 | T-001 reworked (`73563e5`, `b7bb509`, `0532c29`); 27 tests on branch, 35 on stack |
+| 2026-10-26 | Stack rebased and force-pushed; PR #1 now +704/−25 |
 
 ## Open Question OQ-05 (new)
 
