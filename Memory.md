@@ -6,12 +6,23 @@
 
 | Field | Value |
 |---|---|
-| Phase | M0 — Advisor. **IN PROGRESS**; T-001 reworked after `BLOCK`, T-002 in review. |
-| Last file touched | `crates/qinfer-core/src/cfp.rs` (commit `73563e5`) |
-| Immediate next step | Re-submit T-001 to the Critic for a second verdict, then T-003 |
-| Open questions | OQ-01…OQ-04 (`init-charter.md` §8) — non-blocking; `instruction.md` v5 pending one-time human ratification |
-| Verification bar | `SIGNIFICANT` tasks require unit tests **and** a simulation harness (§7) |
+| Phase | M0 — Advisor. **4 of 10 tasks merged to `main`.** T-001 `DONE`; T-002/T-003/T-005 awaiting independent verification. |
+| Last file touched | `Memory.md` (records update) |
+| Immediate next step | T-004 catalogue (12 entries) then T-006 planner — the last product-critical piece |
+| Open questions | OQ-01…OQ-05 — non-blocking. `instruction.md` v5 **ratified** 2026-10-26. |
+| Verification bar | `SIGNIFICANT` tasks require unit tests **and** independent verification (§7). Verification agent running on T-002/T-003/T-005. |
 | Relay | none |
+
+### Merged to `main`
+
+| PR | Task | Merge commit |
+|---|---|---|
+| #1 | T-001 `cfp@1` validation, after **3** Critic rounds (`BLOCK`, `BLOCK`, `PASS-WITH-CHANGES`) | `51e1abb` |
+| #2 | T-002 bandwidth probe | `cfabb76` |
+| #3 | Session records | `9949815` |
+| #4 | `instruction.md` v5 ratification + OQ-05 | merged earlier |
+| #5 | T-003 macOS collectors | `f693729` |
+| #6 | T-005 two-parameter predictor | `2b8be9a` |
 
 ## What exists
 

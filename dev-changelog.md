@@ -34,3 +34,11 @@ Spike result: two-parameter model **1.45 % MAPE** vs 15.6 % naive, R² 0.9996.
 - **T-002** bandwidth probe — thread sweep, 4x LLC floor, 8 tests. PR **#2**, stacked on #1.
 - Rust probe reproduces the Python finding: 126.9 -> 259.0 GB/s (2.04x) at 15 threads.
 - AOP v5 adopted; `instruction.md` v5 reconstructed (DRAFT), `init-charter.md` ACTIVE.
+
+### M0 core merged to `main`
+Six PRs landed (#1–#6) after three Critic rounds on T-001:
+- `BLOCK` → 8 required findings; `BLOCK` again → 14 new findings incl. an unr corroborated headline that would have produced a 10× over-prediction, and a TUI panic at 10–11 columns.
+- `PASS-WITH-CHANGES` → fail-closed `headline_method`, three-valued pressure, sealed `Validated`.
+- `main` at **73 tests + 1 doctest**, build clean.
+
+Tasks: T-001 DONE; T-002/T-003/T-005 merged and awaiting independent verification; T-004 and T-006 next.

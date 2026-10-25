@@ -40,7 +40,7 @@ A spec may only move `DRAFT → ACTIVE` through G1 (structural validator + Criti
 
 | Milestone | Status | Exit gate |
 |---|---|---|
-| M0 Advisor | **IN PROGRESS** | 12 acceptance tests green |
+| M0 Advisor | **IN PROGRESS** — 4 of 10 tasks merged (`cfp`, probe, collectors, predictor) | 12 acceptance tests green |
 | M1 Apply | PENDING | 9 acceptance tests green |
 | M2 Tune & Serve | PENDING | 8 acceptance tests green |
 | M3 Fleet & Air-gap | PENDING | 7 acceptance tests green |

@@ -8,11 +8,11 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 
 | ID | Task | Rev. | Milestone | Status |
 |---|---|---|---|---|
-| T-001 | `cfp@1` schema as Rust types + validation | LOW | M0 | IN PROGRESS — PR #1 |
-| T-002 | Bandwidth probe: thread sweep + pressure guard | MEDIUM | M0 | IN PROGRESS — PR #2 |
-| T-003 | macOS collectors with the documented traps | HIGH | M0 | READY |
-| T-004 | Catalog v1 — 12 entries, arch coverage | HIGH | M0 | READY |
-| T-005 | Predictor + `k_cal` store | MEDIUM | M0 | READY |
+| T-001 | `cfp@1` schema as Rust types + validation | LOW | M0 | **DONE** — PR #1, 3 Critic rounds |
+| T-002 | Bandwidth probe: thread sweep + pressure guard | MEDIUM | M0 | IN PROGRESS — merged #2, awaiting verification |
+| T-003 | macOS collectors with the documented traps | HIGH | M0 | IN PROGRESS — merged #5, awaiting verification |
+| T-004 | Catalog v1 — 12 entries, arch coverage | HIGH | M0 | READY — next |
+| T-005 | Predictor + `k_cal` store | MEDIUM | M0 | IN PROGRESS — merged #6, awaiting verification |
 | T-006 | Planner: constraint solver + rationale | LOW | M0 | READY |
 | T-007 | CLI: `detect`, `plan`, `--json`, exit codes | HIGH | M0 | READY |
 | T-008 | TUI wired to core (not spike JSON) | HIGH | M0 | READY |
