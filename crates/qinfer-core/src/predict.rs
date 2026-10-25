@@ -42,14 +42,6 @@ pub enum ShapeClass {
     Moe,
 }
 
-impl ShapeClass {
-    fn label(self) -> &'static str {
-        match self {
-            ShapeClass::Dense => "dense",
-            ShapeClass::Moe => "moe",
-        }
-    }
-}
 
 /// One measured (artifact, throughput) pair on a specific machine.
 #[derive(Debug, Clone)]
