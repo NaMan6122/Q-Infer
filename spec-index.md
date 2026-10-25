@@ -35,6 +35,7 @@ A spec may only move `DRAFT → ACTIVE` through G1 (structural validator + Criti
 | GB10 dossier | `docs/research/02-nvidia-gb10.md` | ACTIVE | High specs, medium perf |
 | Snapdragon dossier | `docs/research/03-qualcomm-snapdragon.md` | ACTIVE | Low–medium perf |
 | M0 spike | `spikes/m0/REPORT.md` | DONE | High, narrow scope |
+| Test rig inventory | `docs/rigs.md` | ACTIVE | What each owned machine can and cannot prove (ADR-0007) |
 
 ## Milestones
 
