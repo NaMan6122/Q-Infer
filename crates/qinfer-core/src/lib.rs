@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub mod cfp;
+pub mod probe;
 pub use cfp::{parse_major, Violation, MAX_SPREAD_PCT, SUPPORTED_MAJOR};
+pub use probe::{probe, ProbeConfig, ProbeError, ProbeResult};
 
 // ---------------------------------------------------------------------------
 // qinfer/cfp@1 — Capability Fingerprint
