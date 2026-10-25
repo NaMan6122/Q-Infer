@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 
 pub mod cfp;
 pub mod collect;
+pub mod predict;
 pub mod probe;
 pub use cfp::{parse_major, Violation, MAX_SPREAD_PCT, SUPPORTED_MAJOR};
+pub use predict::{Calibration, KvGeometry, Observation, Prediction, ShapeClass};
 pub use probe::{probe, ProbeConfig, ProbeError, ProbeResult};
 
 // ---------------------------------------------------------------------------
