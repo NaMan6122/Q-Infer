@@ -17,5 +17,8 @@ fetch "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5
 fetch "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q8_0.gguf" \
       "qwen2.5-3b-instruct-q8_0.gguf"
 
+fetch "https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct-GGUF/resolve/main/olmoe-1b-7b-0924-instruct-q4_k_m.gguf" \
+      "olmoe-1b-7b-q4_k_m.gguf"
+
 python3 fingerprint.py
 python3 spike.py

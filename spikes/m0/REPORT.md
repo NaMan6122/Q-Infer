@@ -138,3 +138,43 @@ If (1) and (2) hold, §5.2 is load-bearing. If either fails, the planner's ranki
 | `fingerprint.json` | Raw fingerprint from this run |
 | `results.json` | Raw measurements and predictions |
 | `models/` | GGUFs (git-ignored; see `run.sh`) |
+
+---
+
+## 10. MoE addendum — 2026-10-26
+
+The main experiment used only dense models. MoE was the largest untested assumption in §5, and the desk research predicted a `t₀` of **~8.4 ms** for MoE (backed out of a quant ladder on an M3 Ultra), which is what would break rank ordering.
+
+### Method
+
+`OLMoE-1B-7B-0924-Instruct` Q4_K_M — a real sparse MoE: **6.92 B total / 1.3 B active**, 64 experts top-8, 4.87 bit/param, 3.92 GiB. Same harness as §2 (`llama-bench -p 512 -n 128 -r 5 -ngl 99`), same machine, same probe bandwidth.
+
+### Result
+
+| Quantity | Value |
+|---|---|
+| Measured decode | **254.3 tok/s** ± 2.6 |
+| Measured prefill (pp512) | 4 794.8 tok/s |
+| Active bytes per token | 791 MB |
+| Bandwidth term at `k_cal` = 1.175 | 2.95 ms |
+| **Predicted (calibrated on dense models only)** | **239.6 tok/s** |
+| **Error** | **−5.8 %** |
+| Implied `t₀` for this MoE | **0.98 ms** |
+
+### What this means
+
+1. **The dense-fitted calibration transferred to a MoE within 6 %.** `k_cal` = 1.175 and `t₀` = 1.22 ms were fitted exclusively on three dense Qwen2.5 models; nothing was re-tuned. The predictor did not need to know it was looking at an MoE.
+
+2. **`t₀` did not explode.** The implied value is **0.98 ms**, essentially the dense figure — not the ~8.4 ms the desk research predicted. That prediction is **rejected on this hardware and this model**.
+
+3. **`ShapeClass` may be unnecessary.** `predict.rs` keys `t₀` on `Dense` vs `Moe`. If the parameter is genuinely transferable, that axis is dead weight; if it is real on larger MoEs, the current split is too coarse anyway (64 experts top-8 here, 128 top-8 on Qwen3-30B-A3B). Either way the conclusion is the same: **`t₀` must be fitted per observation set, never assumed from a class label.**
+
+### Caveats — this is not yet a general MoE result
+
+- **One MoE, one machine.** OLMoE is small and sparse (1.3 B active). Qwen3-30B-A3B reads ~2.3× more per token and routes across 128 experts.
+- **The 8.4 ms figure came from a different method** — backing `t₀` out of a Q4/Q8/BF16 quant ladder, which conflates routing overhead with expert-working-set effects that a single-model measurement does not expose.
+- **Active-parameter accounting is an estimate.** Published 1.3 B active; bytes-per-param taken from the file's own 4.87 bit average.
+
+### Consequence
+
+Rank ordering across dense and MoE models survives its first real test. The remaining risk is now narrower and better stated: **large MoEs on high-bandwidth machines**, not MoE as a class.
