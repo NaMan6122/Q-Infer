@@ -1,0 +1,60 @@
+{
+  "bandwidth_gbs": 227.99,
+  "bandwidth_single_thread_gbs": 131.42,
+  "reps": 5,
+  "fit": {
+    "t0_ms": 1.219,
+    "eps": 1.175,
+    "r2": 0.9996,
+    "determined": true,
+    "n_models": 3
+  },
+  "mape": {
+    "naive_pct": 15.63,
+    "two_param_pct": 1.45
+  },
+  "rows": [
+    {
+      "model": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "gib": 0.45,
+      "measured_tps": 337.63,
+      "pp_tps": 16323.6,
+      "naive_tps": 469.64,
+      "naive_err_pct": 39.1,
+      "two_param_tps": 329.97,
+      "two_param_err_pct": -2.27,
+      "implied_effective_gbs": 163.9,
+      "implied_eps": 0.719,
+      "build": "11669@620d2225",
+      "backend": "BLAS,MTL"
+    },
+    {
+      "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+      "gib": 1.95,
+      "measured_tps": 108.75,
+      "pp_tps": 2798.3,
+      "naive_tps": 108.62,
+      "naive_err_pct": -0.12,
+      "two_param_tps": 110.46,
+      "two_param_err_pct": 1.57,
+      "implied_effective_gbs": 228.27,
+      "implied_eps": 1.001,
+      "build": "11669@620d2225",
+      "backend": "BLAS,MTL"
+    },
+    {
+      "model": "qwen2.5-3b-instruct-q8_0.gguf",
+      "gib": 3.36,
+      "measured_tps": 68.4,
+      "pp_tps": 2819.8,
+      "naive_tps": 63.15,
+      "naive_err_pct": -7.67,
+      "two_param_tps": 68.06,
+      "two_param_err_pct": -0.5,
+      "implied_effective_gbs": 246.92,
+      "implied_eps": 1.083,
+      "build": "11669@620d2225",
+      "backend": "BLAS,MTL"
+    }
+  ]
+}
