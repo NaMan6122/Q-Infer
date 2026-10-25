@@ -37,7 +37,7 @@ Spike result: two-parameter model **1.45 % MAPE** vs 15.6 % naive, R² 0.9996.
 
 ### M0 core merged to `main`
 Six PRs landed (#1–#6) after three Critic rounds on T-001:
-- `BLOCK` → 8 required findings; `BLOCK` again → 14 new findings incl. an unr corroborated headline that would have produced a 10× over-prediction, and a TUI panic at 10–11 columns.
+- `BLOCK` → 8 required findings; `BLOCK` again → 14 new findings incl. an uncorroborated headline that would have produced a 10× over-prediction, and a TUI panic at 10–11 columns.
 - `PASS-WITH-CHANGES` → fail-closed `headline_method`, three-valued pressure, sealed `Validated`.
 - `main` at **73 tests + 1 doctest**, build clean.
 
