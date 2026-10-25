@@ -279,7 +279,7 @@ pub mod macos {
                     .collect(),
                 best_threads: Some(probe.best_threads as u32),
                 headline_gbs: probe.saturated_gbs,
-                headline_method: "copy".into(),
+                headline_method: Some("copy".into()),
                 buffer_mib: Some((probe.buffer_bytes / (1024 * 1024)) as u32),
             },
             power,
@@ -392,7 +392,7 @@ mod tests {
         assert_eq!(fp.gpu.cores, Some(16));
         assert_eq!(fp.memory.total_bytes, 25_769_803_776);
         assert_eq!(fp.bandwidth.best_threads, Some(15));
-        assert_eq!(fp.bandwidth.headline_method, "copy");
+        assert_eq!(fp.bandwidth.headline_method.as_deref(), Some("copy"));
     }
 
     #[test]
@@ -482,15 +482,13 @@ mod tests {
         assert!(!fp.cpu.brand.is_empty());
         assert!(fp.memory.total_bytes > 0);
         assert!(fp.cpu.arch_id.is_some());
+        // No carve-outs: the collector's output must survive its own validator.
+        // The earlier `E-DET-014` exception was an admission that the T-001 and
+        // T-002 contracts disagreed (Critic N6); that is fixed, so the
+        // exception is gone.
         if let Err(v) = fp.validate() {
-            // Allowed to fail only for reasons the collector intentionally
-            // reports: a single-threaded probe has no sweep, and a pressured
-            // machine is honestly marked unknown.
-            let codes: Vec<&str> = v.iter().map(|x| x.code()).collect();
-            assert!(
-                codes.iter().all(|c| *c == "E-DET-014"),
-                "live fingerprint failed for unexpected reasons: {codes:?}"
-            );
+            let codes: Vec<String> = v.iter().map(|x| format!("{}: {}", x.code(), x)).collect();
+            panic!("live fingerprint failed validation: {codes:#?}");
         }
     }
 }
