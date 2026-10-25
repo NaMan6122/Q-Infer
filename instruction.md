@@ -1,7 +1,9 @@
 # instruction.md — v5 (consolidated)
 
-> **Status: DRAFT — awaiting one-time ratification.**
-> This file reconstructs the operating protocol from two sources: `AOP-v5-AutoSuper.md` (a diff proposal against v4) and the v4 sections that diff references. **Anything marked `⚠R` is reconstructed**, not quoted from the original v4, and should be corrected on review. Once ratified, this file becomes the root of trust and may only be amended through §15.
+> **Status: ACTIVE v5.0 — ratified 2026-10-26.**
+> This file reconstructs the operating protocol from two sources: `AOP-v5-AutoSuper.md` (a diff proposal against v4) and the v4 sections that diff references. **Anything marked `⚠R` is reconstructed**, not quoted from the original v4, and remains open to correction. It is the root of trust and may only be amended through §15.
+>
+> **Ratification log:** OQ-05 (stacked PRs) accepted 2026-10-26 and applied to §11.
 
 ---
 
@@ -157,6 +159,8 @@ Never read, write, or transmit `.env`, CI secret stores, private keys, or tokens
 - **Atomic**: one logical change per commit; never mix a docs change with a behaviour change.
 - **Branching**: `main` is always green. Work on `feat/…`, `fix/…`, `test/…`, `chore/…`, `docs/…`; merge with `--no-ff` so the branch is visible in history.
 - A task's commits land on its branch and merge only when the task is `DONE` with Test Evidence attached.
+- **Stacked PRs** (OQ-05, ratified 2026-10-26): a branch may base on its parent branch rather than `main`. The PR body must declare `Depends on #N`. Merges happen **bottom-up** — no PR merges before its base. After any change to a lower layer, rebase the stack and force-push with `--force-with-lease`, never plain `--force`.
+- **Commit messages state the why**, not the what: the diff already shows the what.
 
 ---
 
