@@ -6,10 +6,10 @@
 
 | Field | Value |
 |---|---|
-| Phase | M0 — Advisor. **Not started**; charter pending ratification. |
-| Last file touched | `init-charter.md` (created, DRAFT) |
-| Immediate next step | On charter ratification → promote T-001…T-007 to `READY` and dispatch workers |
-| Open questions | Q-AOP-1 … Q-AOP-6 (see `init-charter.md` §6) — **blocking phase start only** |
+| Phase | M0 — Advisor. **IN PROGRESS**; T-001 implemented, awaiting Critic. |
+| Last file touched | `crates/qinfer-core/src/cfp.rs` (commit `6a8b92e`) |
+| Immediate next step | T-002 — Rust bandwidth probe (thread sweep + pressure guard) |
+| Open questions | OQ-01…OQ-04 (`init-charter.md` §8) — non-blocking; `instruction.md` v5 pending one-time human ratification |
 | Verification bar | `SIGNIFICANT` tasks require unit tests **and** a simulation harness (§7) |
 | Relay | none |
 
@@ -35,6 +35,8 @@
 | D-04 | Only Apple Silicon is Tier A today | MEDIUM | dossier 02 §1 refused GB10 certification |
 | D-05 | TUI is a read-only dashboard, not a wizard | MEDIUM | ADR-0009 |
 | D-06 | Dashboard verified via `--snapshot` in CI, not a human at a TTY | HIGH | ADR-0009, FR-58 |
+| D-07 | `cfp@1` validation returns *all* violations, not the first | HIGH | commit `6a8b92e`, 9 tests |
+| D-08 | Protocol consolidated into `instruction.md` v5; inferred v4 clauses marked `⚠R` | MEDIUM | awaiting one-time ratification |
 
 ## Open questions (queued, non-blocking)
 
@@ -58,3 +60,6 @@ _none_
 | 2026-10-26 | SDD, 9 ADRs, 4 milestone specs written |
 | 2026-10-26 | Rust workspace + Ratatui dashboard built and validated |
 | 2026-10-26 | AOP v5 adopted; bootstrap + interrogation phase opened |
+| 2026-10-26 | 13 atomic baseline commits on `main`; protocol bootstrap merged |
+| 2026-10-26 | Interrogation complete → `init-charter.md` ACTIVE |
+| 2026-10-26 | T-001 `cfp@1` validation implemented (`6a8b92e`), 11 tests green, Critic dispatched |
