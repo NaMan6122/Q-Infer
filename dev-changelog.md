@@ -28,3 +28,9 @@ Spike result: two-parameter model **1.45 % MAPE** vs 15.6 % naive, R² 0.9996.
 ### Repo
 - Rust workspace: `qinfer-core` (types + invariants), `qinfer-tui` (dashboard).
 - 11 atomic baseline commits; protocol bootstrap on `chore/protocol-bootstrap`.
+
+### M0 implementation
+- **T-001** `cfp@1` validation — 5 invariants, 9 tests. PR **#1**.
+- **T-002** bandwidth probe — thread sweep, 4x LLC floor, 8 tests. PR **#2**, stacked on #1.
+- Rust probe reproduces the Python finding: 126.9 -> 259.0 GB/s (2.04x) at 15 threads.
+- AOP v5 adopted; `instruction.md` v5 reconstructed (DRAFT), `init-charter.md` ACTIVE.
