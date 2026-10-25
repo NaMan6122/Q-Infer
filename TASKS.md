@@ -34,7 +34,7 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 - *Given* `single_thread_gbs` absent, *when* deserialised, *then* it fails — the field is required, not optional.
 - *Given* any consumer, *when* it needs trustworthy facts, *then* it must accept `&Validated<Fingerprint>`; an unvalidated fingerprint cannot reach the planner.
 
-**Test Evidence:** `crates/qinfer-core/src/cfp.rs` — 20 unit tests incl. the committed-artefact regression; `cargo test -p qinfer-core` → 27 passed.
+**Test Evidence:** `crates/qinfer-core/src/cfp.rs` — **34 tests**, incl. the committed-artefact regression, headline corroboration, and the sealed `Validated` type. `cargo test -p qinfer-core` on this branch → **37 passed + 1 `compile_fail` doctest**; on the full stack → **59 passed**.
 **Rollback:** additive module; delete `cfp.rs`, no migration.
 
 ---
