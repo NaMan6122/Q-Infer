@@ -8,8 +8,8 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 
 | ID | Task | Rev. | Milestone | Status |
 |---|---|---|---|---|
-| T-001 | `cfp@1` schema as Rust types + validation | LOW | M0 | READY |
-| T-002 | Bandwidth probe: thread sweep + pressure guard | MEDIUM | M0 | READY |
+| T-001 | `cfp@1` schema as Rust types + validation | LOW | M0 | IN PROGRESS — PR #1 |
+| T-002 | Bandwidth probe: thread sweep + pressure guard | MEDIUM | M0 | IN PROGRESS — PR #2 |
 | T-003 | macOS collectors with the documented traps | HIGH | M0 | READY |
 | T-004 | Catalog v1 — 12 entries, arch coverage | HIGH | M0 | READY |
 | T-005 | Predictor + `k_cal` store | MEDIUM | M0 | READY |
@@ -18,6 +18,15 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | T-008 | TUI wired to core (not spike JSON) | HIGH | M0 | READY |
 | T-009 | Spec structural validator (mechanises G1) | HIGH | M0 | READY |
 | T-010 | Second spike: MoE + CUDA | HIGH | M0 | BLOCKED — hardware |
+
+**Review state.** T-001 and T-002 are implemented with tests green; neither is `DONE` until an independent Verification packet exists and (for T-001, `LOW` reversibility) the Critic signs off.
+
+**PR stack** — merge bottom-up:
+
+```
+#1  feat/m0-advisor  →  main            T-001 cfp@1 validation
+#2  feat/m0-probe    →  feat/m0-advisor T-002 bandwidth probe   (depends on #1)
+```
 
 ---
 

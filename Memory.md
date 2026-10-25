@@ -6,9 +6,9 @@
 
 | Field | Value |
 |---|---|
-| Phase | M0 — Advisor. **IN PROGRESS**; T-001 implemented, awaiting Critic. |
-| Last file touched | `crates/qinfer-core/src/cfp.rs` (commit `6a8b92e`) |
-| Immediate next step | T-002 — Rust bandwidth probe (thread sweep + pressure guard) |
+| Phase | M0 — Advisor. **IN PROGRESS**; T-001 and T-002 implemented, both in review. |
+| Last file touched | `crates/qinfer-core/src/probe.rs` (commit `e087840`) |
+| Immediate next step | T-003 macOS collectors — or apply Critic changes to T-001 if it blocks |
 | Open questions | OQ-01…OQ-04 (`init-charter.md` §8) — non-blocking; `instruction.md` v5 pending one-time human ratification |
 | Verification bar | `SIGNIFICANT` tasks require unit tests **and** a simulation harness (§7) |
 | Relay | none |
@@ -37,6 +37,8 @@
 | D-06 | Dashboard verified via `--snapshot` in CI, not a human at a TTY | HIGH | ADR-0009, FR-58 |
 | D-07 | `cfp@1` validation returns *all* violations, not the first | HIGH | commit `6a8b92e`, 9 tests |
 | D-08 | Protocol consolidated into `instruction.md` v5; inferred v4 clauses marked `⚠R` | MEDIUM | awaiting one-time ratification |
+| D-09 | PRs are **stacked**: each branch bases on its parent, not `main` | HIGH | OQ-05 (needs §11 amendment) |
+| D-10 | Rust probe reproduces the Python finding (126.9 → 259.0 GB/s, 2.04×) | HIGH | `e087840`, example output |
 
 ## Open questions (queued, non-blocking)
 
@@ -63,3 +65,10 @@ _none_
 | 2026-10-26 | 13 atomic baseline commits on `main`; protocol bootstrap merged |
 | 2026-10-26 | Interrogation complete → `init-charter.md` ACTIVE |
 | 2026-10-26 | T-001 `cfp@1` validation implemented (`6a8b92e`), 11 tests green, Critic dispatched |
+| 2026-10-26 | PR **#1** opened: `feat/m0-advisor` → `main` |
+| 2026-10-26 | T-002 bandwidth probe implemented (`e087840`), 19 tests green |
+| 2026-10-26 | PR **#2** opened stacked on #1: `feat/m0-probe` → `feat/m0-advisor` |
+
+## Open Question OQ-05 (new)
+
+`instruction.md` §11 specifies conventional commits and branch-per-change but is silent on **stacked PRs**. Proposal: codify that a branch may base on its parent feature branch rather than `main`, that PR bodies declare `Depends on #N`, and that merges happen bottom-up. Cannot self-apply — §14 reserves `instruction.md` edits to the human.
