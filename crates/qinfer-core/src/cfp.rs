@@ -53,6 +53,11 @@ pub enum Violation {
     UnstableBandwidth { sample_method: String, spread_pct: f64, threshold: f64 },
     /// The headline figure agrees with nothing that was measured (Critic N1).
     HeadlineNotCorroborated { headline_gbs: f64, expected_gbs: f64, source: String },
+    /// No `headline_method`, so we cannot know what the headline measured (F1).
+    MissingHeadlineMethod,
+    InvalidHeadlineMethod { value: String },
+    /// A declared method with no sample to back it (F2).
+    HeadlineMethodWithoutSample { method: String },
     PressuredMachineAssertedMeasured { swap_free_pct: Option<f64>, swap_gib: f64, total_gib: f64 },
     /// Pressure cannot be established, so `measured` is not a claim we can honour.
     PressureUnknownAssertedMeasured,
@@ -74,6 +79,9 @@ impl Violation {
             Violation::ThreadSweepHadNoEffect { .. } => "E-DET-014",
             Violation::UnstableBandwidth { .. } => "E-DET-002",
             Violation::HeadlineNotCorroborated { .. } => "E-DET-015",
+            Violation::MissingHeadlineMethod => "E-DET-017",
+            Violation::InvalidHeadlineMethod { .. } => "E-DET-017",
+            Violation::HeadlineMethodWithoutSample { .. } => "E-DET-018",
             Violation::PressuredMachineAssertedMeasured { .. } => "E-DET-003",
             Violation::PressureUnknownAssertedMeasured => "E-DET-016",
             Violation::MissingProvenance => "E-DET-004",
@@ -115,6 +123,18 @@ impl std::fmt::Display for Violation {
             Violation::HeadlineNotCorroborated { headline_gbs, expected_gbs, source } => write!(
                 f,
                 "headline bandwidth {headline_gbs} GB/s disagrees with {source} ({expected_gbs} GB/s) — the number the predictor uses is not backed by any measurement"
+            ),
+            Violation::MissingHeadlineMethod => write!(
+                f,
+                "no headline_method — without knowing which access pattern produced the headline, no ordering or corroboration check can run"
+            ),
+            Violation::InvalidHeadlineMethod { value } => write!(
+                f,
+                "headline_method {value:?} is not one of [\"copy\", \"triad\"]"
+            ),
+            Violation::HeadlineMethodWithoutSample { method } => write!(
+                f,
+                "headline_method is {method:?} but no {method} sample is present to substantiate it"
             ),
             Violation::PressuredMachineAssertedMeasured { swap_free_pct, swap_gib, total_gib } => match swap_free_pct {
                 Some(pct) => write!(
@@ -182,16 +202,29 @@ impl Fingerprint {
             v.push(Violation::NonFiniteSingleThread { value: single });
         }
 
-        // Like-for-like only: `triad` is systematically slower than `copy`, so a
-        // triad headline against a copy single-thread figure is not comparable.
-        // An absent or unrecognised method is *not* assumed comparable — that was
-        // the permissive default the second Critic rejected (N4).
-        let comparable = self
-            .bandwidth
-            .headline_method
-            .as_deref()
-            .map(|m| m.eq_ignore_ascii_case("copy"))
-            .unwrap_or(false);
+        // Fail closed on the method (Critic round 3, F1). An absent or
+        // unrecognised method previously switched off *every* ordering and
+        // corroboration check, which made a stricter validator more permissive
+        // than its predecessor.
+        let method_raw = self.bandwidth.headline_method.clone();
+        let method_norm = method_raw.as_deref().map(|m| m.trim().to_ascii_lowercase());
+        let recognised: Option<&str> = match method_norm.as_deref() {
+            Some("copy") => Some("copy"),
+            Some("triad") => Some("triad"),
+            Some(_) => {
+                v.push(Violation::InvalidHeadlineMethod {
+                    value: method_raw.clone().unwrap_or_default(),
+                });
+                None
+            }
+            None => {
+                v.push(Violation::MissingHeadlineMethod);
+                None
+            }
+        };
+
+        // Like-for-like only: `triad` is systematically slower than `copy`.
+        let comparable = recognised == Some("copy");
         // `single > 0.0` matters: a negative or NaN single-thread value already
         // has its own violation, and must not also produce a bogus gain check.
         if comparable && single.is_finite() && single > 0.0 && saturated.is_finite() {
@@ -201,11 +234,11 @@ impl Fingerprint {
                     saturated_gbs: saturated,
                 });
             } else if let Some(best) = self.bandwidth.best_threads {
-                // Only meaningful once the sweep is wide enough to expect a knee.
-                // A 2-thread sweep on a 2-core machine can legitimately be flat,
-                // and the probe's 2-decimal rounding makes it indistinguishable
-                // from noise (Critic N6).
-                if best >= MIN_SWEEP_THREADS {
+                // Gate on sweep *width*, not on where the producer says the knee
+                // was: a 15-core machine reporting a flat 2-thread sweep used to
+                // slip through (Critic round 3, N6).
+                let sweep_width = best.max(self.bandwidth.thread_sweep.len() as u32);
+                if sweep_width >= MIN_SWEEP_THREADS {
                     let gain = saturated / single;
                     if gain < MIN_THREAD_GAIN {
                         v.push(Violation::ThreadSweepHadNoEffect {
@@ -218,24 +251,34 @@ impl Fingerprint {
             }
         }
 
-        // N1: the headline is what the predictor consumes (ADR-0003). If it
-        // agrees with nothing that was measured, the whole fingerprint is a
-        // plausible-looking lie — the exact failure this module exists to stop.
-        let named = match self.bandwidth.headline_method.as_deref() {
-            Some(m) if m.eq_ignore_ascii_case("copy") => self.bandwidth.copy.as_ref(),
-            Some(m) if m.eq_ignore_ascii_case("triad") => self.bandwidth.triad.as_ref(),
+        // N1: the headline is what the predictor consumes (ADR-0003). It must be
+        // corroborated against evidence produced by the *same* access pattern —
+        // the sweep is copy-derived, so it only corroborates a copy headline.
+        let named = match recognised {
+            Some("copy") => self.bandwidth.copy.as_ref(),
+            Some("triad") => self.bandwidth.triad.as_ref(),
             _ => None,
         };
-        let corroboration: Option<(f64, String)> = named
-            .map(|s| (s.best_gbs, s.method.clone()))
-            .or_else(|| {
-                self.bandwidth
-                    .thread_sweep
-                    .values()
-                    .cloned()
-                    .fold(None, |acc: Option<f64>, x| Some(acc.map_or(x, |a| a.max(x))))
-                    .map(|m| (m, "thread_sweep".to_string()))
+        if recognised.is_some() && named.is_none() {
+            v.push(Violation::HeadlineMethodWithoutSample {
+                method: recognised.unwrap_or("unknown").to_string(),
             });
+        }
+
+        let corroboration: Option<(f64, String)> = match recognised {
+            Some("copy") => self
+                .bandwidth
+                .thread_sweep
+                .values()
+                .cloned()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .fold(None, |acc: Option<f64>, x| Some(acc.map_or(x, |a| a.max(x))))
+                .map(|m| (m, "thread_sweep".to_string()))
+                .or_else(|| self.bandwidth.copy.as_ref().map(|s| (s.best_gbs, "copy".to_string()))),
+            Some("triad") => self.bandwidth.triad.as_ref().map(|s| (s.best_gbs, "triad".to_string())),
+            _ => None,
+        };
+
         if let Some((expected, source)) = corroboration {
             if expected.is_finite() && expected > 0.0 && saturated.is_finite() {
                 let delta = (saturated - expected).abs() / expected;
@@ -299,7 +342,7 @@ impl Fingerprint {
             match self.pressure() {
                 crate::PressureState::Pressured { swap_free_pct } => {
                     v.push(Violation::PressuredMachineAssertedMeasured {
-                        swap_free_pct: Some(swap_free_pct),
+                        swap_free_pct,
                         swap_gib: self.swap_gib(),
                         total_gib: self.total_gib(),
                     });
@@ -430,6 +473,15 @@ mod tests {
         fp.bandwidth.headline_method = Some("triad".into());
         fp.bandwidth.headline_gbs = 120.1;
         fp.bandwidth.single_thread_gbs = 131.4;
+        // A triad headline needs a triad sample to corroborate against.
+        fp.bandwidth.triad = Some(Sample {
+            method: "triad".into(),
+            best_gbs: 120.1,
+            median_gbs: 118.0,
+            spread_pct: 4.0,
+            reps: Some(7),
+            buffer_bytes: Some(256 * 1024 * 1024),
+        });
         assert_eq!(fp.validate(), Ok(()), "cross-method comparison must not fire");
     }
 
@@ -507,7 +559,10 @@ mod tests {
         let mut fp = fixture();
         fp.bandwidth.copy = None;
         fp.bandwidth.triad = None;
-        assert_eq!(codes(&fp), vec!["E-DET-006"]);
+        let c = codes(&fp);
+        assert!(c.contains(&"E-DET-006"), "expected no-samples, got {c:?}");
+        // A declared method with no matching sample is its own contradiction.
+        assert!(c.contains(&"E-DET-018"), "expected method-without-sample, got {c:?}");
     }
 
     #[test]
@@ -582,15 +637,11 @@ mod tests {
     }
 
     #[test]
-    fn corroborates_the_headline_against_the_thread_sweep_when_no_sample_is_named() {
+    fn corroborates_a_copy_headline_against_the_thread_sweep() {
         let mut fp = fixture();
-        fp.bandwidth.copy = None;
-        fp.bandwidth.headline_method = None;
-        fp.bandwidth.thread_sweep.insert("15".into(), 300.0);
+        fp.bandwidth.thread_sweep.insert("15".into(), 300.0); // headline says 228
         let c = codes(&fp);
         assert!(c.contains(&"E-DET-015"), "sweep comparison must fire, got {c:?}");
-        // No samples at all is independently a violation; both must be reported.
-        assert!(c.contains(&"E-DET-006"), "expected no-samples too, got {c:?}");
     }
 
     /// N5: a Linux-style swap string must not read as "no pressure".
@@ -603,13 +654,20 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_method_does_not_silently_enable_the_ordering_rules() {
+    fn rejects_an_unrecognised_headline_method_rather_than_skipping_the_checks() {
         let mut fp = fixture();
         fp.bandwidth.headline_method = Some("Copy (best of 7)".into());
         fp.bandwidth.single_thread_gbs = 500.0;
         fp.bandwidth.headline_gbs = 100.0;
-        // Deliberately not compared: the method is not recognised as `copy`.
-        assert_eq!(fp.validate(), Ok(()));
+        // Fail closed: an unrecognised method used to switch every check off.
+        assert_eq!(codes(&fp), vec!["E-DET-017"]);
+    }
+
+    #[test]
+    fn rejects_a_missing_headline_method() {
+        let mut fp = fixture();
+        fp.bandwidth.headline_method = None;
+        assert_eq!(codes(&fp), vec!["E-DET-017"]);
     }
 
     /// N6: a flat 2-thread sweep is noise, not a defect.

@@ -95,8 +95,10 @@ pub struct Memory {
 /// Whether the machine is thrashing — and when we genuinely cannot say.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PressureState {
-    Relaxed { swap_free_pct: f64 },
-    Pressured { swap_free_pct: f64 },
+    /// `None` when pressure was inferred from swap-in-use rather than parsed
+    /// headroom — we do not fabricate a percentage we did not measure.
+    Relaxed { swap_free_pct: Option<f64> },
+    Pressured { swap_free_pct: Option<f64> },
     Unknown,
 }
 
@@ -259,9 +261,9 @@ impl Fingerprint {
     pub fn pressure(&self) -> PressureState {
         if let Some(headroom) = self.swap_headroom() {
             return if headroom < crate::cfp::MIN_SWAP_HEADROOM {
-                PressureState::Pressured { swap_free_pct: headroom }
+                PressureState::Pressured { swap_free_pct: Some(headroom) }
             } else {
-                PressureState::Relaxed { swap_free_pct: headroom }
+                PressureState::Relaxed { swap_free_pct: Some(headroom) }
             };
         }
 
@@ -275,10 +277,12 @@ impl Fingerprint {
             let total = self.total_gib();
             if total > 0.0 {
                 let ratio = (used as f64 / (1024.0 * 1024.0 * 1024.0)) / total;
+                // No parsed headroom here, so the percentage is genuinely
+                // unknown — report `None` rather than inventing 0 % or 100 %.
                 return if ratio > 0.5 {
-                    PressureState::Pressured { swap_free_pct: 0.0 }
+                    PressureState::Pressured { swap_free_pct: None }
                 } else {
-                    PressureState::Relaxed { swap_free_pct: 1.0 }
+                    PressureState::Relaxed { swap_free_pct: None }
                 };
             }
         }
@@ -563,9 +567,11 @@ mod tests {
         assert!(ws.fingerprint.is_some(), "raw document is kept for display");
         assert!(ws.trusted.is_none(), "but it must never be exposed as trusted");
         let codes: Vec<&'static str> = ws.violations.iter().map(|v| v.code()).collect();
-        assert_eq!(codes.len(), 4, "expected four violations, got {codes:?}");
+        assert_eq!(codes.len(), 5, "expected five violations, got {codes:?}");
         assert!(codes.contains(&"E-DET-009"), "{codes:?}");
         assert!(codes.contains(&"E-DET-003"), "{codes:?}");
+        // The artefact predates `headline_method`, so the method is unknowable.
+        assert!(codes.contains(&"E-DET-017"), "{codes:?}");
     }
 
     #[test]
