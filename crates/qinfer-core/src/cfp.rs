@@ -385,6 +385,7 @@ mod tests {
             identity: Identity {
                 os: "macos".into(),
                 os_version: Some("27.0.1".into()),
+                os_build: None,
                 arch: "arm64".into(),
                 kernel: None,
                 hostname: None,
@@ -393,6 +394,7 @@ mod tests {
                 brand: "Apple M5 Pro".into(),
                 physical_cores: 15,
                 logical_cores: 15,
+                arch_id: Some("apple-m5-pro".into()),
                 perf_levels: vec![],
                 isa: BTreeMap::new(),
                 l3_bytes: None,

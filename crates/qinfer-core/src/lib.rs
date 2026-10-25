@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub mod cfp;
+pub mod collect;
 pub mod probe;
 pub use cfp::{parse_major, Violation, MAX_SPREAD_PCT, SUPPORTED_MAJOR};
 pub use probe::{probe, ProbeConfig, ProbeError, ProbeResult};
@@ -39,6 +40,10 @@ pub struct Identity {
     pub os: String,
     #[serde(default)]
     pub os_version: Option<String>,
+    /// Build number, e.g. macOS `26A434`. Distinguishes two machines on the
+    /// same point release, which is where firmware regressions hide.
+    #[serde(default)]
+    pub os_build: Option<String>,
     pub arch: String,
     #[serde(default)]
     pub kernel: Option<String>,
@@ -51,6 +56,10 @@ pub struct Cpu {
     pub brand: String,
     pub physical_cores: u32,
     pub logical_cores: u32,
+    /// `sm_121`, `gfx1151`, `apple-m5-pro`, `X1E80100`. Facts, not brands
+    /// (ADR-0002) — the planner keys on this, so it is a first-class field.
+    #[serde(default)]
+    pub arch_id: Option<String>,
     #[serde(default)]
     pub perf_levels: Vec<PerfLevel>,
     #[serde(default)]
@@ -527,6 +536,7 @@ mod tests {
             identity: Identity {
                 os: "macos".into(),
                 os_version: None,
+                os_build: None,
                 arch: "arm64".into(),
                 kernel: None,
                 hostname: None,
@@ -535,6 +545,7 @@ mod tests {
                 brand: "Apple M5 Pro".into(),
                 physical_cores: 15,
                 logical_cores: 15,
+                arch_id: Some("apple-m5-pro".into()),
                 perf_levels: vec![],
                 isa: BTreeMap::new(),
                 l3_bytes: None,
@@ -581,8 +592,8 @@ mod tests {
         let fp = Fingerprint {
             schema: "x".into(),
             collected_at: String::new(),
-            identity: Identity { os: "macos".into(), os_version: None, arch: "arm64".into(), kernel: None, hostname: None },
-            cpu: Cpu { brand: "x".into(), physical_cores: 1, logical_cores: 1, perf_levels: vec![], isa: BTreeMap::new(), l3_bytes: None, max_freq_mhz: None },
+            identity: Identity { os: "macos".into(), os_version: None, os_build: None, arch: "arm64".into(), kernel: None, hostname: None },
+            cpu: Cpu { brand: "x".into(), physical_cores: 1, logical_cores: 1, arch_id: None, perf_levels: vec![], isa: BTreeMap::new(), l3_bytes: None, max_freq_mhz: None },
             gpu: Gpu::default(),
             memory: Memory { total_bytes: 8 << 30, swap_used_bytes: Some(6 << 30), swap_raw: None },
             bandwidth: Bandwidth { copy: None, triad: None, single_thread_gbs: 10.0, thread_sweep: BTreeMap::new(), best_threads: Some(1), headline_gbs: 100.0, headline_method: Some("copy".into()), buffer_mib: None },

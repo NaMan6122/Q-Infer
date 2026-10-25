@@ -50,6 +50,9 @@ pub struct ProbeResult {
     pub single_thread_gbs: f64,
     /// Best figure across the whole sweep. This is what the predictor uses.
     pub saturated_gbs: f64,
+    /// Median of the best thread count's samples. Recorded separately because a
+    /// receipt that reports only a best-of-N figure overstates typical behaviour.
+    pub median_gbs: f64,
     pub best_threads: usize,
     pub sweep: BTreeMap<usize, f64>,
     /// Run-to-run spread of the single-thread series, in percent.
@@ -108,6 +111,7 @@ pub fn probe(cfg: &ProbeConfig) -> ProbeResult {
 
     let mut sweep: BTreeMap<usize, f64> = BTreeMap::new();
     let mut single_samples: Vec<f64> = Vec::new();
+    let mut best_samples: Vec<f64> = Vec::new();
 
     for threads in counts {
         let mut samples = Vec::with_capacity(cfg.reps);
@@ -130,8 +134,9 @@ pub fn probe(cfg: &ProbeConfig) -> ProbeResult {
         }) {
             sweep.insert(threads, round2(best));
             if threads == 1 {
-                single_samples = samples;
+                single_samples = samples.clone();
             }
+            best_samples = samples;
         }
     }
 
@@ -148,9 +153,18 @@ pub fn probe(cfg: &ProbeConfig) -> ProbeResult {
         0.0
     };
 
+    let median_gbs = if best_samples.is_empty() {
+        saturated_gbs
+    } else {
+        let mut s = best_samples;
+        s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        round2(s[s.len() / 2])
+    };
+
     ProbeResult {
         single_thread_gbs,
         saturated_gbs,
+        median_gbs,
         best_threads,
         sweep,
         spread_pct,
