@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/qinfer-core", "crates/qinfer-tui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.80"
+
+[profile.release]
+lto = "thin"
+strip = true

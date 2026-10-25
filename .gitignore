@@ -1,0 +1,12 @@
+.anvaya/
+
+# spike artifacts: models are large and reproducible via run.sh
+spikes/*/models/
+spikes/*/*.gguf
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+
+# rust
+target/
