@@ -31,9 +31,14 @@ pub const CALIBRATED_SPREAD: f64 = 0.15;
 /// Relative half-width when the fit is underdetermined or absent.
 pub const UNCALIBRATED_SPREAD: f64 = 0.45;
 
-/// q8_0 stores one fp16 scale per 32 elements: 32 × 0.5 B + 2 B = 18 B per
-/// 32 elements = 0.5625 B/elem, i.e. 1.0625 B per element-pair. The commonly
-/// quoted "half of fp16" is wrong by 6.25%, which matters at 128k context.
+/// q8_0 is **8-bit** weights, not 4-bit: 32 elements × 1 B + one 2 B fp16
+/// scale = 34 B per 32 elements = 1.0625 B/elem. Against fp16's 2 B that is
+/// **53.1%**, not the commonly quoted "half" — a 6.25% error on the binding
+/// constraint at 128k context.
+///
+/// (An earlier version of this comment derived 18 B per block, which is the
+/// 4-bit arithmetic. The constant was right and the prose was wrong; the
+/// verification pass caught the contradiction.)
 pub const Q8_0_BYTES_PER_ELEMENT: f64 = 1.0625;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +92,10 @@ pub struct Prediction {
     pub decode_tps: Interval,
     pub ms_per_token: f64,
     pub determined: bool,
+    /// True when the inputs were too degenerate to predict from (e.g. a zero or
+    /// NaN bandwidth). The interval is all-zero and `ms_per_token` is zero:
+    /// callers must check this rather than reading `p50` as a throughput.
+    pub refused: bool,
 }
 
 /// Ordinary least squares of `t` on `bytes`, giving both parameters at once:
@@ -153,14 +162,25 @@ pub fn fit(observations: &[Observation], bw_gbs: f64) -> Calibration {
 
 /// Predict decode throughput for an artifact of `bytes_per_token`.
 pub fn predict(cal: &Calibration, bytes_per_token: u64, bw_gbs: f64) -> Prediction {
-    let bw = if bw_gbs > 0.0 && bw_gbs.is_finite() { bw_gbs } else { 1.0 };
+    // Refuse rather than fabricate. A zero/NaN bandwidth used to be silently
+    // replaced by 1 GB/s, which published a number (0.48 tok/s) that looked like
+    // a prediction and was not one (verification finding 4).
+    if !(bw_gbs > 0.0) || !bw_gbs.is_finite() {
+        return Prediction {
+            decode_tps: Interval { p10: 0.0, p50: 0.0, p90: 0.0 },
+            ms_per_token: 0.0,
+            determined: false,
+            refused: true,
+        };
+    }
+
     let k = if cal.determined && cal.k_cal.is_finite() && cal.k_cal > 0.0 {
         cal.k_cal // never clamped to 1.0 — see the module doc
     } else {
         1.0
     };
 
-    let seconds = cal.t0_ms / 1000.0 + (bytes_per_token as f64) / (k * bw * 1e9);
+    let seconds = cal.t0_ms / 1000.0 + (bytes_per_token as f64) / (k * bw_gbs * 1e9);
     let p50 = if seconds > 0.0 { 1.0 / seconds } else { 0.0 };
 
     let spread = if cal.determined { CALIBRATED_SPREAD } else { UNCALIBRATED_SPREAD };
@@ -173,6 +193,7 @@ pub fn predict(cal: &Calibration, bytes_per_token: u64, bw_gbs: f64) -> Predicti
         },
         ms_per_token: round3(seconds * 1000.0),
         determined: cal.determined,
+        refused: false,
     }
 }
 
