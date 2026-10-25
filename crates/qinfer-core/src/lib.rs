@@ -6,6 +6,7 @@
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 pub mod cfp;
@@ -108,16 +109,27 @@ pub struct Bandwidth {
     pub copy: Option<Sample>,
     #[serde(default)]
     pub triad: Option<Sample>,
-    #[serde(default)]
-    pub single_thread_gbs: Option<f64>,
+    /// Required, not optional: charter §4.2 and PRD §20.2.2 both demand the
+    /// single-thread figure, and an `Option` here let consumers silently
+    /// substitute the saturated number (Critic finding, v0.2).
+    pub single_thread_gbs: f64,
     /// Thread count -> GB/s. Keys arrive as strings from JSON.
     #[serde(default)]
     pub thread_sweep: BTreeMap<String, f64>,
     #[serde(default)]
     pub best_threads: Option<u32>,
     pub headline_gbs: f64,
+    /// Which access pattern produced `headline_gbs`. Comparing a `triad`
+    /// headline against a `copy` single-thread figure is a guaranteed false
+    /// positive — `triad` moves 3 arrays per 2 for `copy`.
+    #[serde(default = "default_headline_method")]
+    pub headline_method: String,
     #[serde(default)]
     pub buffer_mib: Option<u32>,
+}
+
+fn default_headline_method() -> String {
+    "copy".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,6 +138,12 @@ pub struct Sample {
     pub best_gbs: f64,
     pub median_gbs: f64,
     pub spread_pct: f64,
+    /// Retained so "measured" with `reps: 1` is distinguishable from best-of-7,
+    /// and so the 4x-LLC floor is checkable (PRD §20.2.1).
+    #[serde(default)]
+    pub reps: Option<u32>,
+    #[serde(default)]
+    pub buffer_bytes: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -192,16 +210,19 @@ impl Fingerprint {
         self.bandwidth.headline_gbs
     }
 
-    pub fn single_thread_gbs(&self) -> Option<f64> {
+    pub fn single_thread_gbs(&self) -> f64 {
         self.bandwidth.single_thread_gbs
     }
 
     /// How much the single-threaded probe under-reports. Anything above ~1.3
     /// means a naive probe would have halved the prediction (spike F1).
     pub fn thread_gain(&self) -> Option<f64> {
-        self.single_thread_gbs()
-            .filter(|v| *v > 0.0)
-            .map(|st| self.saturated_gbs() / st)
+        let st = self.single_thread_gbs();
+        if st > 0.0 && st.is_finite() {
+            Some(self.saturated_gbs() / st)
+        } else {
+            None
+        }
     }
 
     pub fn total_gib(&self) -> f64 {
@@ -212,10 +233,26 @@ impl Fingerprint {
         self.memory.swap_used_bytes.unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0)
     }
 
+    /// Free fraction of *configured swap*, parsed from `swap_raw`.
+    ///
+    /// The Critic was right that `swap_used / RAM` is the wrong denominator: the
+    /// reference machine sat at 48.1% and passed while swap was 96.3% full with
+    /// 463 MB left. Headroom is the honest signal.
+    pub fn swap_headroom(&self) -> Option<f64> {
+        let raw = self.memory.swap_raw.as_deref()?;
+        let total = parse_mib(raw, "total")?;
+        let free = parse_mib(raw, "free")?;
+        if total > 0.0 { Some(free / total) } else { None }
+    }
+
     /// A machine in deep swap produces garbage bandwidth numbers. The
     /// fingerprint is still valid, but predictions built on it are not.
     pub fn memory_pressured(&self) -> bool {
-        self.total_gib() > 0.0 && self.swap_gib() > 0.5 * self.total_gib()
+        if let Some(headroom) = self.swap_headroom() {
+            return headroom < 0.10;
+        }
+        let total = self.total_gib();
+        total > 0.0 && self.swap_gib() > 0.5 * total
     }
 
     pub fn isa_enabled(&self) -> Vec<&str> {
@@ -257,10 +294,63 @@ impl Fingerprint {
 
 /// Where the dashboard looks for data. M0 reads the spike artefacts directly so
 /// the UI can be built and tested before the planner exists.
+/// A fingerprint that has passed [`Fingerprint::validate`].
+///
+/// The Critic's finding on the first version of T-001 was that a voluntary
+/// `validate()` call is not an invariant — nothing called it. A component that
+/// requires trustworthy hardware facts takes `&Validated<Fingerprint>` and
+/// therefore *cannot* be handed an unvalidated one. That is the difference
+/// between a convention and a constraint.
+#[derive(Debug, Clone)]
+pub struct Validated<T>(T);
+
+impl<T> Validated<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> Deref for Validated<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl TryFrom<Fingerprint> for Validated<Fingerprint> {
+    type Error = Vec<Violation>;
+    fn try_from(fp: Fingerprint) -> Result<Self, Self::Error> {
+        fp.validate()?;
+        Ok(Validated(fp))
+    }
+}
+
+impl<'de> Deserialize<'de> for Validated<Fingerprint> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fp = Fingerprint::deserialize(deserializer)?;
+        Validated::try_from(fp).map_err(|violations| {
+            let msg = violations
+                .iter()
+                .map(|v| format!("{}: {}", v.code(), v))
+                .collect::<Vec<_>>()
+                .join("; ");
+            serde::de::Error::custom(msg)
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub root: PathBuf,
+    /// Raw fingerprint, for display only. Never feed this to the planner.
     pub fingerprint: Option<Fingerprint>,
+    /// Present only if the fingerprint passed validation. This is what the
+    /// planner and predictor are expected to take.
+    pub trusted: Option<Validated<Fingerprint>>,
+    pub violations: Vec<Violation>,
     pub results: Option<SpikeResults>,
     pub error: Option<String>,
 }
@@ -273,12 +363,27 @@ impl Workspace {
     }
 
     pub fn load(root: PathBuf) -> Self {
-        let mut ws = Workspace { root: root.clone(), fingerprint: None, results: None, error: None };
+        let mut ws = Workspace {
+            root: root.clone(),
+            fingerprint: None,
+            trusted: None,
+            violations: Vec::new(),
+            results: None,
+            error: None,
+        };
 
         let fp_path = root.join("fingerprint.json");
         match std::fs::read_to_string(&fp_path) {
             Ok(s) => match serde_json::from_str::<Fingerprint>(&s) {
-                Ok(fp) => ws.fingerprint = Some(fp),
+                Ok(fp) => {
+                    // Validate at the boundary. A rejected fingerprint is still
+                    // kept for display, but it is never exposed as `trusted`.
+                    match fp.validate() {
+                        Ok(()) => ws.trusted = Some(Validated(fp.clone())),
+                        Err(v) => ws.violations = v,
+                    }
+                    ws.fingerprint = Some(fp);
+                }
                 Err(e) => ws.error = Some(format!("{}: {}", fp_path.display(), e)),
             },
             Err(_) => {
@@ -311,6 +416,24 @@ impl Workspace {
     pub fn has_data(&self) -> bool {
         self.fingerprint.is_some()
     }
+
+    /// True only when the fingerprint passed every invariant.
+    pub fn is_trusted(&self) -> bool {
+        self.trusted.is_some()
+    }
+}
+
+/// Pull `<key> = <number>M` out of macOS's `vm.swapusage` string.
+fn parse_mib(raw: &str, key: &str) -> Option<f64> {
+    let idx = raw.find(key)?;
+    let rest = &raw[idx + key.len()..];
+    let eq = rest.find('=')?;
+    let rest = rest[eq + 1..].trim_start();
+    let num: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    num.parse().ok()
 }
 
 fn find_spike_dir(start: &Path) -> Option<PathBuf> {
@@ -358,10 +481,11 @@ mod tests {
             bandwidth: Bandwidth {
                 copy: None,
                 triad: None,
-                single_thread_gbs: Some(131.0),
+                single_thread_gbs: 131.0,
                 thread_sweep: sweep,
                 best_threads: Some(15),
                 headline_gbs: 228.0,
+                headline_method: "copy".into(),
                 buffer_mib: None,
             },
             power: Power::default(),
@@ -382,7 +506,7 @@ mod tests {
             cpu: Cpu { brand: "x".into(), physical_cores: 1, logical_cores: 1, perf_levels: vec![], isa: BTreeMap::new(), l3_bytes: None, max_freq_mhz: None },
             gpu: Gpu::default(),
             memory: Memory { total_bytes: 8 << 30, swap_used_bytes: Some(6 << 30), swap_raw: None },
-            bandwidth: Bandwidth { copy: None, triad: None, single_thread_gbs: None, thread_sweep: BTreeMap::new(), best_threads: None, headline_gbs: 100.0, buffer_mib: None },
+            bandwidth: Bandwidth { copy: None, triad: None, single_thread_gbs: 10.0, thread_sweep: BTreeMap::new(), best_threads: Some(1), headline_gbs: 100.0, headline_method: "copy".into(), buffer_mib: None },
             power: Power::default(),
             provenance: BTreeMap::new(),
         };
