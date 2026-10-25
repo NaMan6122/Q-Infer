@@ -1,0 +1,546 @@
+{
+  "schema": "qinfer/catalog@1",
+  "version": "2026.10.26",
+  "generated_at": "2026-10-26T00:00:00Z",
+  "note": "M0 seed. Four artifacts measured in spikes/m0; the rest carry estimated sizes and are not plannable.",
+  "entries": [
+    {
+      "id": "qwen2.5-0.5b-q4_k_m",
+      "family": "qwen2.5",
+      "display": "Qwen2.5 0.5B Instruct (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 491400032,
+        "bytes_source": "measured",
+        "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "Qwen"
+      },
+      "model": {
+        "total_params": 494000000,
+        "active_params": 494000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 24,
+          "kv_heads": 2,
+          "head_dim": 64
+        },
+        "ctx_max": 32768,
+        "hidden": 896,
+        "vocab": 151936
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "verified",
+          "evidence": "spikes/m0/results.json"
+        },
+        {
+          "arch_id": "apple-m4-max",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [
+        {
+          "backend": "metal",
+          "decode_tps": 337.63,
+          "prefill_tps": 16323.6,
+          "note": "llama.cpp 11669"
+        }
+      ],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "qwen2.5-3b-q4_k_m",
+      "family": "qwen2.5",
+      "display": "Qwen2.5 3B Instruct (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 2104932768,
+        "bytes_source": "measured",
+        "sha256": "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "Qwen"
+      },
+      "model": {
+        "total_params": 3085000000,
+        "active_params": 3085000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 36,
+          "kv_heads": 2,
+          "head_dim": 128
+        },
+        "ctx_max": 32768,
+        "hidden": 2048,
+        "vocab": 151936
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "verified",
+          "evidence": "spikes/m0/results.json"
+        }
+      ],
+      "measurements": [
+        {
+          "backend": "metal",
+          "decode_tps": 108.75,
+          "prefill_tps": 2798.3,
+          "note": "llama.cpp 11669"
+        }
+      ],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "qwen2.5-3b-q8_0",
+      "family": "qwen2.5",
+      "display": "Qwen2.5 3B Instruct (Q8_0)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q8_0",
+        "bytes": 3616088480,
+        "bytes_source": "measured",
+        "sha256": "6dcc22694c8654b045ec40bbe350212b88893fd9010e8474bae5b19a43578ba1",
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "Qwen"
+      },
+      "model": {
+        "total_params": 3085000000,
+        "active_params": 3085000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 36,
+          "kv_heads": 2,
+          "head_dim": 128
+        },
+        "ctx_max": 32768,
+        "hidden": 2048,
+        "vocab": 151936
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "verified",
+          "evidence": "spikes/m0/results.json"
+        }
+      ],
+      "measurements": [
+        {
+          "backend": "metal",
+          "decode_tps": 68.4,
+          "prefill_tps": 2819.8,
+          "note": "llama.cpp 11669"
+        }
+      ],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "olmoe-1b-7b-q4_k_m",
+      "family": "olmoe",
+      "display": "OLMoE 1B-7B Instruct (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 4211730432,
+        "bytes_source": "measured",
+        "sha256": "8c310f1435a1222338fd2d3d974975be9cd908180b644bab0c2a94da1ac32f3f",
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "allenai"
+      },
+      "model": {
+        "total_params": 6919161856,
+        "active_params": 1300000000,
+        "shape": "moe",
+        "kv": {
+          "layers": 16,
+          "kv_heads": 16,
+          "head_dim": 128
+        },
+        "ctx_max": 4096,
+        "hidden": 2048,
+        "vocab": 50304
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "verified",
+          "evidence": "spikes/m0/REPORT.md \u00a710"
+        }
+      ],
+      "measurements": [
+        {
+          "backend": "metal",
+          "decode_tps": 254.35,
+          "prefill_tps": 4794.8,
+          "note": "llama.cpp 11669"
+        }
+      ],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "qwen2.5-7b-q4_k_m",
+      "family": "qwen2.5",
+      "display": "Qwen2.5 7B Instruct (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 4680000000,
+        "bytes_source": "estimated",
+        "sha256": null,
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "Qwen"
+      },
+      "model": {
+        "total_params": 7620000000,
+        "active_params": 7620000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 28,
+          "kv_heads": 4,
+          "head_dim": 128
+        },
+        "ctx_max": 32768,
+        "hidden": 3584,
+        "vocab": 152064
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "qwen2.5-14b-q4_k_m",
+      "family": "qwen2.5",
+      "display": "Qwen2.5 14B Instruct (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 9000000000,
+        "bytes_source": "estimated",
+        "sha256": null,
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "Qwen"
+      },
+      "model": {
+        "total_params": 14700000000,
+        "active_params": 14700000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 48,
+          "kv_heads": 8,
+          "head_dim": 128
+        },
+        "ctx_max": 32768,
+        "hidden": 5120,
+        "vocab": 152064
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "qwen2.5-32b-q4_k_m",
+      "family": "qwen2.5",
+      "display": "Qwen2.5 32B Instruct (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 19800000000,
+        "bytes_source": "estimated",
+        "sha256": null,
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "Qwen"
+      },
+      "model": {
+        "total_params": 32500000000,
+        "active_params": 32500000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 64,
+          "kv_heads": 8,
+          "head_dim": 128
+        },
+        "ctx_max": 32768,
+        "hidden": 5120,
+        "vocab": 152064
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "qwen3-30b-a3b-q4_k_m",
+      "family": "qwen3",
+      "display": "Qwen3 30B-A3B (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 18600000000,
+        "bytes_source": "estimated",
+        "sha256": null,
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "Qwen"
+      },
+      "model": {
+        "total_params": 30500000000,
+        "active_params": 3300000000,
+        "shape": "moe",
+        "kv": {
+          "layers": 48,
+          "kv_heads": 4,
+          "head_dim": 128
+        },
+        "ctx_max": 32768,
+        "hidden": 2048,
+        "vocab": 151936
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "llama-3.1-8b-q4_k_m",
+      "family": "llama-3.1",
+      "display": "Llama 3.1 8B Instruct (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 4920000000,
+        "bytes_source": "estimated",
+        "sha256": null,
+        "licence": "llama-3.1-community",
+        "gated": true,
+        "publisher": "Meta"
+      },
+      "model": {
+        "total_params": 8030000000,
+        "active_params": 8030000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 32,
+          "kv_heads": 8,
+          "head_dim": 128
+        },
+        "ctx_max": 131072,
+        "hidden": 4096,
+        "vocab": 128256
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "llama-3.3-70b-q4_k_m",
+      "family": "llama-3.3",
+      "display": "Llama 3.3 70B Instruct (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 42500000000,
+        "bytes_source": "estimated",
+        "sha256": null,
+        "licence": "llama-3.3-community",
+        "gated": true,
+        "publisher": "Meta"
+      },
+      "model": {
+        "total_params": 70600000000,
+        "active_params": 70600000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 80,
+          "kv_heads": 8,
+          "head_dim": 128
+        },
+        "ctx_max": 131072,
+        "hidden": 8192,
+        "vocab": 128256
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "gemma-2-9b-q4_k_m",
+      "family": "gemma-2",
+      "display": "Gemma 2 9B (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 5760000000,
+        "bytes_source": "estimated",
+        "sha256": null,
+        "licence": "gemma-terms",
+        "gated": true,
+        "publisher": "Google"
+      },
+      "model": {
+        "total_params": 9240000000,
+        "active_params": 9240000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 42,
+          "kv_heads": 8,
+          "head_dim": 256
+        },
+        "ctx_max": 8192,
+        "hidden": 3584,
+        "vocab": 256000
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    },
+    {
+      "id": "mistral-7b-v0.3-q4_k_m",
+      "family": "mistral",
+      "display": "Mistral 7B Instruct v0.3 (Q4_K_M)",
+      "artifact": {
+        "format": "gguf",
+        "quant": "Q4_K_M",
+        "bytes": 4370000000,
+        "bytes_source": "estimated",
+        "sha256": null,
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "Mistral"
+      },
+      "model": {
+        "total_params": 7240000000,
+        "active_params": 7240000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 32,
+          "kv_heads": 8,
+          "head_dim": 128
+        },
+        "ctx_max": 32768,
+        "hidden": 4096,
+        "vocab": 32768
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "metal",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
+    }
+  ]
+}
