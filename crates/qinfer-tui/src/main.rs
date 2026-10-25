@@ -310,7 +310,7 @@ fn render_overview(f: &mut Frame, app: &App, area: Rect) {
             .constraints([Constraint::Length(7), Constraint::Length(4), Constraint::Min(5)])
             .split(area);
         render_machine_compact(f, fp, rows[0]);
-        render_bandwidth(f, fp, rows[1]);
+        render_bandwidth(f, fp, app.ws.is_trusted(), rows[1]);
         render_headline(f, app, fp, rows[2]);
     } else {
         let rows = Layout::default()
@@ -323,7 +323,7 @@ fn render_overview(f: &mut Frame, app: &App, area: Rect) {
             .split(rows[0]);
         render_machine(f, fp, cols[0]);
         render_capabilities(f, fp, cols[1]);
-        render_bandwidth(f, fp, rows[1]);
+        render_bandwidth(f, fp, app.ws.is_trusted(), rows[1]);
         render_headline(f, app, fp, rows[2]);
     }
 }
@@ -417,31 +417,40 @@ fn render_capabilities(f: &mut Frame, fp: &Fingerprint, area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_bandwidth(f: &mut Frame, fp: &Fingerprint, area: Rect) {
-    let block = panel(" Memory bandwidth (measured, not declared) ");
+fn render_bandwidth(f: &mut Frame, fp: &Fingerprint, trusted: bool, area: Rect) {
+    // ADR-0002 / Critic N8: a rejected fingerprint must not be labelled
+    // "measured" or rendered in the colour that means "this is fine".
+    let title = if trusted {
+        " Memory bandwidth (measured, not declared) "
+    } else {
+        " Memory bandwidth (unverified — do not use for planning) "
+    };
+    let block = panel(title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let sat = fp.saturated_gbs();
     let st = fp.single_thread_gbs();
-    let gain = fp.thread_gain().unwrap_or(1.0);
+    let gain = fp.thread_gain();
     let bar_w = (inner.width as usize).saturating_sub(34).clamp(6, 40);
     let show_gain = inner.width >= 84;
+    let accent = if trusted { Color::Cyan } else { Color::DarkGray };
 
     let mut second = vec![
         Span::styled(
             format!(" {:<2} threads  ", fp.bandwidth.best_threads.unwrap_or(0)),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(accent),
         ),
-        Span::styled(bar(sat, sat, bar_w), Style::default().fg(Color::Cyan)),
+        Span::styled(bar(sat, sat, bar_w), Style::default().fg(accent)),
         Span::styled(
             format!("  {:>6.1} GB/s", sat),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ),
     ];
-    if show_gain {
+    // Never fabricate a gain: if single-thread is unusable, say nothing.
+    if let (true, Some(g)) = (show_gain, gain) {
         second.push(Span::styled(
-            format!("   ({:.2}× single-thread)", gain),
+            format!("   ({g:.2}× single-thread)"),
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -470,9 +479,12 @@ fn render_headline(f: &mut Frame, app: &App, fp: &Fingerprint, area: Rect) {
             format!(" ⚠ {} validation violation(s) — this fingerprint is NOT trusted:", app.ws.violations.len()),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )));
+        // Every other width computation in this file uses saturating_sub; this
+        // one did not, and panicked the dashboard at 10-11 columns (Critic N2).
+        let avail = (inner.width as usize).saturating_sub(10).max(8);
         for v in app.ws.violations.iter().take(3) {
             lines.push(Line::from(Span::styled(
-                format!("   {}  {}", v.code(), truncate(&v.to_string(), inner.width as usize - 10)),
+                format!("   {}  {}", v.code(), truncate(&v.to_string(), avail)),
                 Style::default().fg(Color::Red),
             )));
         }
@@ -506,11 +518,13 @@ fn render_headline(f: &mut Frame, app: &App, fp: &Fingerprint, area: Rect) {
                     r.fit.t0_ms, r.fit.eps, r.fit.r2
                 )),
             ]));
+            // Accuracy is only a claim if the machine beneath it is trusted.
+            let accuracy_colour = if app.ws.is_trusted() { Color::Green } else { Color::DarkGray };
             lines.push(Line::from(vec![
                 Span::styled(" Accuracy   ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("MAPE {:.2}%", r.mape.two_param_pct),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default().fg(accuracy_colour).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!("   (naive roofline {:.1}%)", r.mape.naive_pct),

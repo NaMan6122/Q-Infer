@@ -34,6 +34,11 @@ pub const MIN_SWAP_HEADROOM: f64 = 0.10;
 /// report `best_threads == 1` and skip the check entirely.
 pub const MIN_THREAD_GAIN: f64 = 1.05;
 
+/// Below this many threads, "no gain" is not evidence of a defect: a 2-core
+/// machine can legitimately be flat, and the probe's rounding makes the
+/// difference indistinguishable from noise (Critic N6).
+pub const MIN_SWEEP_THREADS: u32 = 4;
+
 const SCHEMA_PREFIX: &str = "qinfer/cfp@";
 const KNOWN_PROVENANCE: [&str; 4] = ["measured", "exact", "inferred", "unknown"];
 
@@ -46,7 +51,11 @@ pub enum Violation {
     SaturatedBelowSingleThread { single_gbs: f64, saturated_gbs: f64 },
     ThreadSweepHadNoEffect { gain: f64, best_threads: u32, floor: f64 },
     UnstableBandwidth { sample_method: String, spread_pct: f64, threshold: f64 },
-    PressuredMachineAssertedMeasured { swap_free_pct: f64, swap_gib: f64, total_gib: f64 },
+    /// The headline figure agrees with nothing that was measured (Critic N1).
+    HeadlineNotCorroborated { headline_gbs: f64, expected_gbs: f64, source: String },
+    PressuredMachineAssertedMeasured { swap_free_pct: Option<f64>, swap_gib: f64, total_gib: f64 },
+    /// Pressure cannot be established, so `measured` is not a claim we can honour.
+    PressureUnknownAssertedMeasured,
     MissingProvenance,
     InvalidProvenance { value: String },
     NoSamplesForMeasured,
@@ -64,7 +73,9 @@ impl Violation {
             Violation::NonFiniteSingleThread { .. } => "E-DET-013",
             Violation::ThreadSweepHadNoEffect { .. } => "E-DET-014",
             Violation::UnstableBandwidth { .. } => "E-DET-002",
+            Violation::HeadlineNotCorroborated { .. } => "E-DET-015",
             Violation::PressuredMachineAssertedMeasured { .. } => "E-DET-003",
+            Violation::PressureUnknownAssertedMeasured => "E-DET-016",
             Violation::MissingProvenance => "E-DET-004",
             Violation::InvalidProvenance { .. } => "E-DET-005",
             Violation::NoSamplesForMeasured => "E-DET-006",
@@ -101,10 +112,24 @@ impl std::fmt::Display for Violation {
                 f,
                 "{sample_method} bandwidth spread {spread_pct:.1}% exceeds {threshold}% but provenance claims a measurement"
             ),
-            Violation::PressuredMachineAssertedMeasured { swap_free_pct, swap_gib, total_gib } => write!(
+            Violation::HeadlineNotCorroborated { headline_gbs, expected_gbs, source } => write!(
                 f,
-                "swap is {:.0}% full ({swap_gib:.1} GiB used of {total_gib:.1} GiB RAM) but bandwidth provenance claims a measurement",
-                100.0 - swap_free_pct
+                "headline bandwidth {headline_gbs} GB/s disagrees with {source} ({expected_gbs} GB/s) — the number the predictor uses is not backed by any measurement"
+            ),
+            Violation::PressuredMachineAssertedMeasured { swap_free_pct, swap_gib, total_gib } => match swap_free_pct {
+                Some(pct) => write!(
+                    f,
+                    "swap is {:.0}% full ({swap_gib:.1} GiB used of {total_gib:.1} GiB RAM) but bandwidth provenance claims a measurement",
+                    100.0 - pct
+                ),
+                None => write!(
+                    f,
+                    "swap is exhausted ({swap_gib:.1} GiB used of {total_gib:.1} GiB RAM) but bandwidth provenance claims a measurement"
+                ),
+            },
+            Violation::PressureUnknownAssertedMeasured => write!(
+                f,
+                "memory pressure cannot be determined from this fingerprint, so bandwidth may not claim to be `measured`"
             ),
             Violation::MissingProvenance => write!(
                 f,
@@ -159,7 +184,14 @@ impl Fingerprint {
 
         // Like-for-like only: `triad` is systematically slower than `copy`, so a
         // triad headline against a copy single-thread figure is not comparable.
-        let comparable = self.bandwidth.headline_method.eq_ignore_ascii_case("copy");
+        // An absent or unrecognised method is *not* assumed comparable — that was
+        // the permissive default the second Critic rejected (N4).
+        let comparable = self
+            .bandwidth
+            .headline_method
+            .as_deref()
+            .map(|m| m.eq_ignore_ascii_case("copy"))
+            .unwrap_or(false);
         // `single > 0.0` matters: a negative or NaN single-thread value already
         // has its own violation, and must not also produce a bogus gain check.
         if comparable && single.is_finite() && single > 0.0 && saturated.is_finite() {
@@ -169,7 +201,11 @@ impl Fingerprint {
                     saturated_gbs: saturated,
                 });
             } else if let Some(best) = self.bandwidth.best_threads {
-                if best > 1 {
+                // Only meaningful once the sweep is wide enough to expect a knee.
+                // A 2-thread sweep on a 2-core machine can legitimately be flat,
+                // and the probe's 2-decimal rounding makes it indistinguishable
+                // from noise (Critic N6).
+                if best >= MIN_SWEEP_THREADS {
                     let gain = saturated / single;
                     if gain < MIN_THREAD_GAIN {
                         v.push(Violation::ThreadSweepHadNoEffect {
@@ -178,6 +214,37 @@ impl Fingerprint {
                             floor: MIN_THREAD_GAIN,
                         });
                     }
+                }
+            }
+        }
+
+        // N1: the headline is what the predictor consumes (ADR-0003). If it
+        // agrees with nothing that was measured, the whole fingerprint is a
+        // plausible-looking lie — the exact failure this module exists to stop.
+        let named = match self.bandwidth.headline_method.as_deref() {
+            Some(m) if m.eq_ignore_ascii_case("copy") => self.bandwidth.copy.as_ref(),
+            Some(m) if m.eq_ignore_ascii_case("triad") => self.bandwidth.triad.as_ref(),
+            _ => None,
+        };
+        let corroboration: Option<(f64, String)> = named
+            .map(|s| (s.best_gbs, s.method.clone()))
+            .or_else(|| {
+                self.bandwidth
+                    .thread_sweep
+                    .values()
+                    .cloned()
+                    .fold(None, |acc: Option<f64>, x| Some(acc.map_or(x, |a| a.max(x))))
+                    .map(|m| (m, "thread_sweep".to_string()))
+            });
+        if let Some((expected, source)) = corroboration {
+            if expected.is_finite() && expected > 0.0 && saturated.is_finite() {
+                let delta = (saturated - expected).abs() / expected;
+                if delta > 0.01 {
+                    v.push(Violation::HeadlineNotCorroborated {
+                        headline_gbs: saturated,
+                        expected_gbs: expected,
+                        source,
+                    });
                 }
             }
         }
@@ -227,12 +294,18 @@ impl Fingerprint {
                 }
             }
 
-            if self.memory_pressured() {
-                v.push(Violation::PressuredMachineAssertedMeasured {
-                    swap_free_pct: self.swap_headroom().unwrap_or(0.0),
-                    swap_gib: self.swap_gib(),
-                    total_gib: self.total_gib(),
-                });
+            // N5: pressure that cannot be established is not "fine". A Linux
+            // producer emitting an unparseable `swap_raw` used to sail through.
+            match self.pressure() {
+                crate::PressureState::Pressured { swap_free_pct } => {
+                    v.push(Violation::PressuredMachineAssertedMeasured {
+                        swap_free_pct: Some(swap_free_pct),
+                        swap_gib: self.swap_gib(),
+                        total_gib: self.total_gib(),
+                    });
+                }
+                crate::PressureState::Unknown => v.push(Violation::PressureUnknownAssertedMeasured),
+                crate::PressureState::Relaxed { .. } => {}
             }
         }
 
@@ -245,8 +318,6 @@ mod tests {
     use super::*;
     use crate::{Bandwidth, Cpu, Gpu, Identity, Memory, Power, Sample};
     use std::collections::BTreeMap;
-
-    const MIB: f64 = 1024.0 * 1024.0;
 
     fn sample(method: &str, spread: f64) -> Sample {
         Sample {
@@ -298,7 +369,7 @@ mod tests {
                 thread_sweep: BTreeMap::new(),
                 best_threads: Some(15),
                 headline_gbs: 228.0,
-                headline_method: "copy".into(),
+                headline_method: Some("copy".into()),
                 buffer_mib: Some(256),
             },
             power: Power::default(),
@@ -356,7 +427,7 @@ mod tests {
     #[test]
     fn skips_ordering_checks_when_headline_comes_from_triad() {
         let mut fp = fixture();
-        fp.bandwidth.headline_method = "triad".into();
+        fp.bandwidth.headline_method = Some("triad".into());
         fp.bandwidth.headline_gbs = 120.1;
         fp.bandwidth.single_thread_gbs = 131.4;
         assert_eq!(fp.validate(), Ok(()), "cross-method comparison must not fire");
@@ -368,6 +439,9 @@ mod tests {
         fp.bandwidth.best_threads = Some(1);
         fp.bandwidth.headline_gbs = 131.4;
         fp.bandwidth.single_thread_gbs = 131.4;
+        if let Some(c) = fp.bandwidth.copy.as_mut() {
+            c.best_gbs = 131.4; // corroboration must still hold
+        }
         assert_eq!(fp.validate(), Ok(()), "one thread cannot beat itself");
     }
 
@@ -497,16 +571,121 @@ mod tests {
         assert!(fp.memory_pressured());
     }
 
+    // --- findings from Critic round 2 -------------------------------------
+
+    /// N1: the headline is what the predictor consumes. It must be corroborated.
     #[test]
-    fn a_zero_ram_fingerprint_is_not_silently_healthy() {
+    fn rejects_a_headline_that_contradicts_its_measurements() {
         let mut fp = fixture();
-        fp.memory.total_bytes = 0;
-        fp.memory.swap_raw = None;
-        let _ = fp.memory_pressured(); // must not panic or divide by zero
+        fp.bandwidth.headline_gbs = 999.0; // copy sample says 228.0
+        assert_eq!(codes(&fp), vec!["E-DET-015"]);
     }
 
     #[test]
-    fn buffer_mib_constant_is_unused_but_documented() {
-        assert_eq!(MIB / MIB, 1.0);
+    fn corroborates_the_headline_against_the_thread_sweep_when_no_sample_is_named() {
+        let mut fp = fixture();
+        fp.bandwidth.copy = None;
+        fp.bandwidth.headline_method = None;
+        fp.bandwidth.thread_sweep.insert("15".into(), 300.0);
+        let c = codes(&fp);
+        assert!(c.contains(&"E-DET-015"), "sweep comparison must fire, got {c:?}");
+        // No samples at all is independently a violation; both must be reported.
+        assert!(c.contains(&"E-DET-006"), "expected no-samples too, got {c:?}");
+    }
+
+    /// N5: a Linux-style swap string must not read as "no pressure".
+    #[test]
+    fn rejects_measured_when_pressure_cannot_be_determined() {
+        let mut fp = fixture();
+        fp.memory.swap_raw = Some("SwapTotal: 8388604 kB".into()); // Linux format
+        fp.memory.swap_used_bytes = None;
+        assert_eq!(codes(&fp), vec!["E-DET-016"]);
+    }
+
+    #[test]
+    fn an_unknown_method_does_not_silently_enable_the_ordering_rules() {
+        let mut fp = fixture();
+        fp.bandwidth.headline_method = Some("Copy (best of 7)".into());
+        fp.bandwidth.single_thread_gbs = 500.0;
+        fp.bandwidth.headline_gbs = 100.0;
+        // Deliberately not compared: the method is not recognised as `copy`.
+        assert_eq!(fp.validate(), Ok(()));
+    }
+
+    /// N6: a flat 2-thread sweep is noise, not a defect.
+    #[test]
+    fn tolerant_of_a_two_thread_sweep_that_adds_nothing() {
+        let mut fp = fixture();
+        fp.bandwidth.best_threads = Some(2);
+        fp.bandwidth.single_thread_gbs = 131.42;
+        fp.bandwidth.headline_gbs = 131.50;
+        if let Some(c) = fp.bandwidth.copy.as_mut() {
+            c.best_gbs = 131.50;
+        }
+        assert_eq!(fp.validate(), Ok(()));
+    }
+
+    #[test]
+    fn four_threads_that_add_nothing_are_still_a_defect() {
+        let mut fp = fixture();
+        fp.bandwidth.best_threads = Some(4);
+        fp.bandwidth.single_thread_gbs = 131.42;
+        fp.bandwidth.headline_gbs = 131.50;
+        if let Some(c) = fp.bandwidth.copy.as_mut() {
+            c.best_gbs = 131.50;
+        }
+        assert_eq!(codes(&fp), vec!["E-DET-014"]);
+    }
+
+    // --- the trust token itself (Critic N3) -------------------------------
+
+    #[test]
+    fn validated_try_from_rejects_an_invalid_fingerprint() {
+        let mut fp = fixture();
+        fp.bandwidth.copy = Some(sample("copy", 77.81));
+        assert!(crate::Validated::try_from(fp).is_err());
+    }
+
+    #[test]
+    fn validated_try_from_accepts_a_valid_fingerprint() {
+        assert!(crate::Validated::try_from(fixture()).is_ok());
+    }
+
+    #[test]
+    fn validated_deserialize_rejects_an_invalid_document() {
+        let mut fp = fixture();
+        fp.bandwidth.copy = Some(sample("copy", 77.81));
+        let json = serde_json::to_string(&serde_json::json!({
+            "schema": fp.schema, "identity": {"os":"macos","arch":"arm64"},
+            "cpu": {"brand":"x","physical_cores":1,"logical_cores":1},
+            "gpu": {}, "memory": {"total_bytes": 1024},
+            "bandwidth": {
+                "copy": {"method":"copy","best_gbs":228.0,"median_gbs":220.0,"spread_pct":77.81},
+                "single_thread_gbs": 131.4, "headline_gbs": 228.0,
+                "headline_method": "copy", "thread_sweep": {"15": 228.0}, "best_threads": 15
+            },
+            "provenance": {"bandwidth": "measured"}
+        }))
+        .unwrap();
+        assert!(serde_json::from_str::<crate::Validated<crate::Fingerprint>>(&json).is_err());
+    }
+
+    /// AC 7: the field is required, so a document without it cannot even parse.
+    #[test]
+    fn a_document_without_single_thread_bandwidth_fails_to_deserialize() {
+        let raw = include_str!("../../../spikes/m0/fingerprint.json");
+        let mut v: serde_json::Value = serde_json::from_str(raw).unwrap();
+        v["bandwidth"].as_object_mut().unwrap().remove("single_thread_gbs");
+        assert!(serde_json::from_str::<Fingerprint>(&v.to_string()).is_err());
+    }
+
+    /// N12: a zero-RAM document must be a violation, not a shrug.
+    #[test]
+    fn a_zero_ram_fingerprint_cannot_claim_a_measurement() {
+        let mut fp = fixture();
+        fp.memory.total_bytes = 0;
+        fp.memory.swap_raw = None;
+        fp.memory.swap_used_bytes = None;
+        assert_eq!(codes(&fp), vec!["E-DET-016"]);
     }
 }

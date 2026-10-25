@@ -6,7 +6,6 @@
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 pub mod cfp;
@@ -93,6 +92,14 @@ pub struct Memory {
     pub swap_raw: Option<String>,
 }
 
+/// Whether the machine is thrashing — and when we genuinely cannot say.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PressureState {
+    Relaxed { swap_free_pct: f64 },
+    Pressured { swap_free_pct: f64 },
+    Unknown,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Power {
     #[serde(default)]
@@ -122,14 +129,14 @@ pub struct Bandwidth {
     /// Which access pattern produced `headline_gbs`. Comparing a `triad`
     /// headline against a `copy` single-thread figure is a guaranteed false
     /// positive — `triad` moves 3 arrays per 2 for `copy`.
-    #[serde(default = "default_headline_method")]
-    pub headline_method: String,
+    ///
+    /// Deliberately **not** defaulted: assuming "copy" would be the plausible
+    /// default ADR-0002 forbids, and it silently enabled both ordering rules
+    /// for documents that never declared a method.
+    #[serde(default)]
+    pub headline_method: Option<String>,
     #[serde(default)]
     pub buffer_mib: Option<u32>,
-}
-
-fn default_headline_method() -> String {
-    "copy".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -245,14 +252,44 @@ impl Fingerprint {
         if total > 0.0 { Some(free / total) } else { None }
     }
 
+    /// Three-valued: "I cannot tell" must never collapse into "fine".
+    ///
+    /// The second Critic showed that an unparseable `swap_raw` (Linux style)
+    /// with no `swap_used_bytes` made a machine at 100% swap look healthy.
+    pub fn pressure(&self) -> PressureState {
+        if let Some(headroom) = self.swap_headroom() {
+            return if headroom < crate::cfp::MIN_SWAP_HEADROOM {
+                PressureState::Pressured { swap_free_pct: headroom }
+            } else {
+                PressureState::Relaxed { swap_free_pct: headroom }
+            };
+        }
+
+        // A non-empty `swap_raw` we could not parse means the format is unknown,
+        // not that the machine is idle.
+        if self.memory.swap_raw.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+            return PressureState::Unknown;
+        }
+
+        if let Some(used) = self.memory.swap_used_bytes {
+            let total = self.total_gib();
+            if total > 0.0 {
+                let ratio = (used as f64 / (1024.0 * 1024.0 * 1024.0)) / total;
+                return if ratio > 0.5 {
+                    PressureState::Pressured { swap_free_pct: 0.0 }
+                } else {
+                    PressureState::Relaxed { swap_free_pct: 1.0 }
+                };
+            }
+        }
+
+        PressureState::Unknown
+    }
+
     /// A machine in deep swap produces garbage bandwidth numbers. The
     /// fingerprint is still valid, but predictions built on it are not.
     pub fn memory_pressured(&self) -> bool {
-        if let Some(headroom) = self.swap_headroom() {
-            return headroom < 0.10;
-        }
-        let total = self.total_gib();
-        total > 0.0 && self.swap_gib() > 0.5 * total
+        matches!(self.pressure(), PressureState::Pressured { .. })
     }
 
     pub fn isa_enabled(&self) -> Vec<&str> {
@@ -294,53 +331,65 @@ impl Fingerprint {
 
 /// Where the dashboard looks for data. M0 reads the spike artefacts directly so
 /// the UI can be built and tested before the planner exists.
-/// A fingerprint that has passed [`Fingerprint::validate`].
-///
-/// The Critic's finding on the first version of T-001 was that a voluntary
-/// `validate()` call is not an invariant — nothing called it. A component that
-/// requires trustworthy hardware facts takes `&Validated<Fingerprint>` and
-/// therefore *cannot* be handed an unvalidated one. That is the difference
-/// between a convention and a constraint.
-#[derive(Debug, Clone)]
-pub struct Validated<T>(T);
+/// Sealed module: the tuple field is private to this module, so no other module
+/// in the crate can construct a `Validated` without going through `try_from`.
+/// (The second Critic found that a crate-root `Validated(fp)` compiled fine from
+/// child modules — an invariant with a hole is not an invariant.)
+mod validated {
+    use super::{Fingerprint, Violation};
+    use std::ops::Deref;
 
-impl<T> Validated<T> {
-    pub fn into_inner(self) -> T {
-        self.0
+    /// A fingerprint that has passed [`Fingerprint::validate`].
+    ///
+    /// The first Critic's finding was that a voluntary `validate()` call is not
+    /// an invariant — nothing called it. A component that needs trustworthy
+    /// hardware facts takes `&Validated<Fingerprint>` and therefore *cannot* be
+    /// handed an unvalidated one.
+    ///
+    /// Construction is sealed to this module:
+    ///
+    /// ```compile_fail
+    /// use qinfer_core::Validated;
+    /// struct Unvalidated;
+    /// let _skip_validation = Validated(Unvalidated);
+    /// ```
+    #[derive(Debug, Clone)]
+    pub struct Validated<T>(T);
+
+    impl<T> Deref for Validated<T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            &self.0
+        }
+    }
+
+    impl TryFrom<Fingerprint> for Validated<Fingerprint> {
+        type Error = Vec<Violation>;
+        fn try_from(fp: Fingerprint) -> Result<Self, Self::Error> {
+            fp.validate()?;
+            Ok(Validated(fp))
+        }
+    }
+
+    impl<'de> serde::Deserialize<'de> for Validated<Fingerprint> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let fp = Fingerprint::deserialize(deserializer)?;
+            Validated::try_from(fp).map_err(|violations| {
+                let msg = violations
+                    .iter()
+                    .map(|v| format!("{}: {}", v.code(), v))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                serde::de::Error::custom(msg)
+            })
+        }
     }
 }
 
-impl<T> Deref for Validated<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-impl TryFrom<Fingerprint> for Validated<Fingerprint> {
-    type Error = Vec<Violation>;
-    fn try_from(fp: Fingerprint) -> Result<Self, Self::Error> {
-        fp.validate()?;
-        Ok(Validated(fp))
-    }
-}
-
-impl<'de> Deserialize<'de> for Validated<Fingerprint> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let fp = Fingerprint::deserialize(deserializer)?;
-        Validated::try_from(fp).map_err(|violations| {
-            let msg = violations
-                .iter()
-                .map(|v| format!("{}: {}", v.code(), v))
-                .collect::<Vec<_>>()
-                .join("; ");
-            serde::de::Error::custom(msg)
-        })
-    }
-}
+pub use validated::Validated;
 
 #[derive(Debug, Clone)]
 pub struct Workspace {
@@ -374,18 +423,27 @@ impl Workspace {
 
         let fp_path = root.join("fingerprint.json");
         match std::fs::read_to_string(&fp_path) {
-            Ok(s) => match serde_json::from_str::<Fingerprint>(&s) {
-                Ok(fp) => {
-                    // Validate at the boundary. A rejected fingerprint is still
-                    // kept for display, but it is never exposed as `trusted`.
-                    match fp.validate() {
-                        Ok(()) => ws.trusted = Some(Validated(fp.clone())),
-                        Err(v) => ws.violations = v,
+            Ok(s) => {
+                // Trusted path goes through `Validated`'s Deserialize impl, so
+                // the type system — not this function — decides what is trusted.
+                match serde_json::from_str::<Validated<Fingerprint>>(&s) {
+                    Ok(v) => {
+                        ws.fingerprint = Some((*v).clone());
+                        ws.trusted = Some(v);
                     }
-                    ws.fingerprint = Some(fp);
+                    Err(trust_err) => match serde_json::from_str::<Fingerprint>(&s) {
+                        // Rejected: keep the raw document for display, record why.
+                        Ok(fp) => {
+                            ws.violations = fp.validate().err().unwrap_or_default();
+                            ws.fingerprint = Some(fp);
+                            if ws.violations.is_empty() {
+                                ws.error = Some(format!("{}: {}", fp_path.display(), trust_err));
+                            }
+                        }
+                        Err(e) => ws.error = Some(format!("{}: {}", fp_path.display(), e)),
+                    },
                 }
-                Err(e) => ws.error = Some(format!("{}: {}", fp_path.display(), e)),
-            },
+            }
             Err(_) => {
                 ws.error = Some(format!(
                     "no fingerprint at {} — run `python3 spikes/m0/fingerprint.py`",
@@ -485,7 +543,7 @@ mod tests {
                 thread_sweep: sweep,
                 best_threads: Some(15),
                 headline_gbs: 228.0,
-                headline_method: "copy".into(),
+                headline_method: Some("copy".into()),
                 buffer_mib: None,
             },
             power: Power::default(),
@@ -497,6 +555,19 @@ mod tests {
         assert!(!fp.memory_pressured());
     }
 
+    /// N3: the boundary where validation actually happens had no test at all.
+    #[test]
+    fn workspace_load_refuses_the_committed_fingerprint() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spikes/m0");
+        let ws = Workspace::load(root);
+        assert!(ws.fingerprint.is_some(), "raw document is kept for display");
+        assert!(ws.trusted.is_none(), "but it must never be exposed as trusted");
+        let codes: Vec<&'static str> = ws.violations.iter().map(|v| v.code()).collect();
+        assert_eq!(codes.len(), 4, "expected four violations, got {codes:?}");
+        assert!(codes.contains(&"E-DET-009"), "{codes:?}");
+        assert!(codes.contains(&"E-DET-003"), "{codes:?}");
+    }
+
     #[test]
     fn heavy_swap_marks_memory_pressured() {
         let fp = Fingerprint {
@@ -506,7 +577,7 @@ mod tests {
             cpu: Cpu { brand: "x".into(), physical_cores: 1, logical_cores: 1, perf_levels: vec![], isa: BTreeMap::new(), l3_bytes: None, max_freq_mhz: None },
             gpu: Gpu::default(),
             memory: Memory { total_bytes: 8 << 30, swap_used_bytes: Some(6 << 30), swap_raw: None },
-            bandwidth: Bandwidth { copy: None, triad: None, single_thread_gbs: 10.0, thread_sweep: BTreeMap::new(), best_threads: Some(1), headline_gbs: 100.0, headline_method: "copy".into(), buffer_mib: None },
+            bandwidth: Bandwidth { copy: None, triad: None, single_thread_gbs: 10.0, thread_sweep: BTreeMap::new(), best_threads: Some(1), headline_gbs: 100.0, headline_method: Some("copy".into()), buffer_mib: None },
             power: Power::default(),
             provenance: BTreeMap::new(),
         };
