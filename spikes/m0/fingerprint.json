@@ -1,16 +1,17 @@
 {
-  "schema": "qinfer/cfp-spike@1",
-  "collected_at": "2026-10-25T21:25:10Z",
+  "schema": "qinfer/cfp@1",
+  "collected_at": "2026-10-26T10:40:48Z",
   "identity": {
     "os": "macos",
     "os_version": "27.0.1",
     "os_build": "26A434",
     "arch": "arm64",
     "kernel": "27.0.0",
-    "hostname": "HelloWorld-2.local"
+    "hostname": "HyveMind.local"
   },
   "cpu": {
     "brand": "Apple M5 Pro",
+    "arch_id": "apple-m5-pro",
     "physical_cores": 15,
     "logical_cores": 15,
     "perf_levels": [
@@ -50,8 +51,9 @@
   },
   "memory": {
     "total_bytes": 25769803776,
-    "swap_used_bytes": 12399285370,
-    "swap_raw": "total = 12288.00M  used = 11824.88M  free = 463.12M  (encrypted)"
+    "available_bytes": 5900550144,
+    "swap_used_bytes": 6000937533,
+    "swap_raw": "total = 6144.00M  used = 5722.94M  free = 421.06M  (encrypted)"
   },
   "power": {
     "low_power_mode": null,
@@ -63,49 +65,50 @@
       "method": "copy",
       "buffer_bytes": 268435456,
       "reps": 7,
-      "best_gbs": 131.42,
-      "median_gbs": 127.39,
-      "spread_pct": 77.81,
+      "best_gbs": 134.97,
+      "median_gbs": 132.71,
+      "spread_pct": 65.38,
       "samples_gbs": [
-        29.17,
-        121.05,
-        124.37,
-        131.42,
-        131.04,
-        129.56,
-        127.39
+        46.73,
+        132.71,
+        133.3,
+        132.69,
+        134.97,
+        134.08,
+        132.2
       ]
     },
     "triad": {
       "method": "triad",
       "buffer_bytes": 268435456,
       "reps": 7,
-      "best_gbs": 120.14,
-      "median_gbs": 114.3,
-      "spread_pct": 30.28,
+      "best_gbs": 130.06,
+      "median_gbs": 129.08,
+      "spread_pct": 4.99,
       "samples_gbs": [
-        114.3,
-        101.55,
-        83.76,
-        105.38,
-        120.14,
-        119.39,
-        117.6
+        128.26,
+        130.06,
+        129.44,
+        129.08,
+        127.97,
+        123.56,
+        129.67
       ]
     },
-    "single_thread_gbs": 131.42,
+    "single_thread_gbs": 134.97,
     "thread_sweep": {
-      "2": 192.94,
-      "4": 216.37,
-      "8": 225.87,
-      "15": 227.99
+      "2": 200.67,
+      "4": 256.08,
+      "8": 263.2,
+      "15": 254.73
     },
-    "best_threads": 15,
-    "headline_gbs": 227.99,
+    "best_threads": 8,
+    "headline_gbs": 263.2,
+    "headline_method": "copy",
     "buffer_mib": 256
   },
   "provenance": {
-    "bandwidth": "measured",
+    "bandwidth": "unknown",
     "cpu": "exact",
     "gpu": "exact",
     "thermal": "unknown"
