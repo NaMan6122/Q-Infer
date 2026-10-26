@@ -1,5 +1,7 @@
 # Task Backlog — M0 (Advisor)
 
+> **M1 tasks (T-012 … T-016) are specified in [`ROADMAP.md`](ROADMAP.md) §4** rather than here. They enter this backlog when M1 starts, so that a task section never exists without its acceptance criteria having been thought through.
+
 Atomic units. A task is `DONE` only when its acceptance criteria are covered by tests built **independently** of the worker that wrote the code (AOP v5 §7), and the Orchestrator has seen the Verification packet.
 
 **Reversibility** — `LOW` requires a Critic review plus ≥2 genuinely evaluated options (G2). `MEDIUM`/`HIGH` proceed with logging.
