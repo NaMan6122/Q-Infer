@@ -45,6 +45,8 @@ pub struct Parsed {
     pub command: Command,
     pub json: bool,
     pub offline: bool,
+    /// Re-run the probe and collector instead of reading a stored fingerprint.
+    pub refresh: bool,
     pub family: Option<String>,
     pub ctx: u32,
     pub objective: Objective,
@@ -85,6 +87,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
         command,
         json: false,
         offline: false,
+        refresh: false,
         family: None,
         ctx: 4096,
         objective: Objective::Balanced,
@@ -94,6 +97,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
         match arg.as_str() {
             "--json" => parsed.json = true,
             "--offline" => parsed.offline = true,
+            "--refresh" => parsed.refresh = true,
             "--model" => {
                 let v = it.next().ok_or_else(|| ParseError::MissingValue("--model".into()))?;
                 parsed.family = Some(v.clone());
@@ -258,7 +262,40 @@ fn load_workspace() -> Workspace {
     Workspace::discover()
 }
 
+/// Run the probe and the collector, then write a conformant `cfp@1` document.
+/// This is what makes `detect` a verb rather than a file read.
+fn refresh_fingerprint(root: &std::path::Path) -> Result<qinfer_core::Fingerprint, String> {
+    use qinfer_core::collect::{macos, SystemRunner};
+
+    let cfg = qinfer_core::ProbeConfig::default();
+    if let Err(e) = qinfer_core::probe::validate_config(&cfg, None) {
+        return Err(format!("probe refused: {e}"));
+    }
+    let probe = qinfer_core::probe(&cfg);
+    let fp = macos::collect(&SystemRunner, &probe).map_err(|e| e.to_string())?;
+
+    let path = root.join("fingerprint.json");
+    let json = serde_json::to_string_pretty(&fp).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(fp)
+}
+
 fn cmd_detect(parsed: &Parsed) -> i32 {
+    let ws0 = load_workspace();
+
+    // AT-0.10's caveat: without --refresh, `detect` only reads a document that
+    // some earlier run produced. With it, the machine is actually probed.
+    if parsed.refresh || ws0.fingerprint.is_none() {
+        if let Err(e) = refresh_fingerprint(&ws0.root) {
+            if parsed.json {
+                println!("{}", error_envelope("detect", exit::FAILED, &e));
+            } else {
+                eprintln!("qinfer: refresh failed: {e}");
+            }
+            return exit::FAILED;
+        }
+    }
+
     let ws = load_workspace();
     let Some(fp) = ws.fingerprint.as_ref() else {
         let msg = ws.error.clone().unwrap_or_else(|| "no fingerprint found".into());
