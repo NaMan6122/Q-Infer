@@ -15,7 +15,7 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | T-005 | Predictor + `k_cal` store | MEDIUM | M0 | **DONE** — merged #6, verified 8/8 |
 | T-006 | Planner: constraint solver + rationale | LOW | M0 | **DONE** — PR #12, rank order reproduced |
 | T-007 | CLI: `detect`, `plan`, `--json`, exit codes | HIGH | M0 | READY |
-| T-008 | TUI wired to core (not spike JSON) | HIGH | M0 | READY |
+| T-008 | TUI wired to core (not spike JSON) | HIGH | M0 | **DONE** — PR #13, Plans tab reads `PlanSet` |
 | T-009 | Spec structural validator (mechanises G1) | HIGH | M0 | READY |
 | T-010 | Second spike: MoE + CUDA | HIGH | M0 | BLOCKED — hardware |
 
