@@ -126,11 +126,24 @@ pub fn probe(cfg: &ProbeConfig) -> ProbeResult {
         copy_chunked(&src, &mut dst, threads);
 
         for _ in 0..reps {
-            let t0 = Instant::now();
-            copy_chunked(&src, &mut dst, threads);
-            let dt = t0.elapsed().as_secs_f64();
-            if dt > 0.0 {
-                let gbs = (n_elems as f64 * 8.0 * COPY_BYTES_MOVED) / dt / 1e9;
+            // A sub-microsecond copy is below the clock's useful resolution, so
+            // repeat the inner loop until the interval is measurable and divide
+            // out. Without this, a tiny buffer reports 0 GB/s and looks like a
+            // broken engine rather than an under-sized experiment.
+            let mut inner = 1usize;
+            let (dt, gbs) = loop {
+                let t0 = Instant::now();
+                for _ in 0..inner {
+                    copy_chunked(&src, &mut dst, threads);
+                }
+                let dt = t0.elapsed().as_secs_f64();
+                if dt >= 1e-6 || inner >= 1_024 {
+                    let per_copy = dt / inner as f64;
+                    break (per_copy, (n_elems as f64 * 8.0 * COPY_BYTES_MOVED) / per_copy / 1e9);
+                }
+                inner *= 8;
+            };
+            if dt > 0.0 && gbs.is_finite() {
                 samples.push(gbs);
             }
         }
