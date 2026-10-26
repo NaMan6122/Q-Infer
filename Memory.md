@@ -6,12 +6,29 @@
 
 | Field | Value |
 |---|---|
-| Phase | M0 — Advisor. **4 of 10 tasks merged to `main`.** T-001 `DONE`; T-002/T-003/T-005 awaiting independent verification. |
-| Last file touched | `Memory.md` (records update) |
-| Immediate next step | T-004 catalogue (12 entries) then T-006 planner — the last product-critical piece |
-| Open questions | OQ-01…OQ-05 — non-blocking. `instruction.md` v5 **ratified** 2026-10-26. |
-| Verification bar | `SIGNIFICANT` tasks require unit tests **and** independent verification (§7). Verification agent running on T-002/T-003/T-005. |
+| Phase | **M0 — Advisor: task-complete.** All 10 tasks implemented (+ T-011 MLX adapter). 4 milestone acceptance tests still undemonstrated. |
+| Last file touched | `crates/qinfer-tui/src/cli.rs` (staleness warning, AT-0.7) |
+| Immediate next step | Close AT-0.8/AT-0.9, then begin **M1 (Apply)** — provisioner, verifier, receipts |
+| Open questions | OQ-01…OQ-05 — non-blocking. `instruction.md` v5 **ratified**. |
+| Verification bar | `SIGNIFICANT` tasks require unit tests **and** independent verification (§7) — satisfied for T-002/T-003/T-005 |
 | Relay | none |
+
+### M0 acceptance-test status
+
+| AT | Status |
+|---|---|
+| AT-0.1 detect reports arch/bandwidth, validates | ✅ |
+| AT-0.2 pressured machine degrades to `unknown` | ✅ (provenance `unknown` at 65% spread) |
+| AT-0.3 ≥3 ranked plans with rationale/risks/fallbacks | ✅ |
+| AT-0.4 model too large → exit 3 with arithmetic | ✅ (27B) |
+| AT-0.5 predicted rank order matches measured | ✅ |
+| AT-0.6 MAPE ≤10% vs spike fixtures | ✅ (~1.5%) |
+| AT-0.7 stale catalogue warns offline | ⚠ wired + unit-tested; live warning needs an aged catalogue |
+| AT-0.8 unsupported platform → exit 2 | ⚠ covered by unit test; never exercised on unsupported hardware |
+| AT-0.9 no network I/O, no writes outside state dir | ⚠ structural only (no network deps linked) — not traced |
+| AT-0.10 detect --fast <2 s | ✅ 0.67 s cold, <0.01 s warm (full probe path unmeasured) |
+| AT-0.11 dashboard renders, opens no listener | ✅ |
+| AT-0.12 snapshots at 64×20 and 140×40 | ✅ |
 
 ### Merged to `main`
 
