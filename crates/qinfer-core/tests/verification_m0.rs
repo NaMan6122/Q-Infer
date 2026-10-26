@@ -951,15 +951,20 @@ fn x_validated_cannot_wrap_an_invalid_fingerprint() {
     assert!(!codes.contains(&"E-DET-002"), "the spread is healthy here, so it must not fire: {codes:?}");
 }
 
-/// AC: `Workspace::load` on `spikes/m0` yields `trusted == None` with non-empty
-/// violations — the committed fingerprint is known-bad and the type says so.
+/// AC: `Workspace::load` on the known-bad fixture yields `trusted == None` with
+/// non-empty violations. The bad artifact is now kept under `fixtures/` because
+/// the live `spikes/m0/fingerprint.json` became schema-conformant and honest —
+/// so the evidence of a bad run needs its own home, not a reused filename.
 #[test]
 fn x_workspace_load_refuses_the_committed_spike_fingerprint() {
-    let ws = Workspace::load(spike_root());
+    let ws = Workspace::load(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spikes/m0/fixtures"),
+    );
 
     assert!(ws.error.is_none(), "the artefacts must parse; error = {:?}", ws.error);
     assert!(ws.fingerprint.is_some(), "the raw document is kept for display");
-    assert!(ws.results.is_some(), "results.json is part of the evidence of record");
+    // This fixture directory holds only the known-bad fingerprint; the results
+    // artifact stays with the live spike data and is covered by other tests.
 
     // The whole point: a document that violates the invariants is exposed as an
     // untrusted display value, never as a `Validated`.
@@ -987,7 +992,10 @@ fn x_workspace_load_refuses_the_committed_spike_fingerprint() {
 
     // Trust is a property of the type, not of this function: the same bytes must
     // be rejected on every path in.
-    let raw = std::fs::read_to_string(spike_root().join("fingerprint.json")).expect("read fixture");
+    let raw = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spikes/m0/fixtures/fingerprint.json"),
+    )
+    .expect("read fixture");
     assert!(
         serde_json::from_str::<Fingerprint>(&raw).is_ok(),
         "the document itself parses — rejection is about invariants, not syntax"

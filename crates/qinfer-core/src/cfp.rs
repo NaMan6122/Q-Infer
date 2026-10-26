@@ -611,7 +611,7 @@ mod tests {
     /// repository is NOT trustworthy, and the type must say so.
     #[test]
     fn rejects_the_committed_reference_fingerprint() {
-        let raw = include_str!("../../../spikes/m0/fingerprint.json");
+        let raw = include_str!("../../../spikes/m0/fixtures/fingerprint.json");
         let fp: Fingerprint = serde_json::from_str(raw).expect("fixture must parse");
         let err = fp.validate().expect_err("the reference fingerprint is known-bad");
         let codes: Vec<&str> = err.iter().map(|v| v.code()).collect();
@@ -734,7 +734,7 @@ mod tests {
     /// AC 7: the field is required, so a document without it cannot even parse.
     #[test]
     fn a_document_without_single_thread_bandwidth_fails_to_deserialize() {
-        let raw = include_str!("../../../spikes/m0/fingerprint.json");
+        let raw = include_str!("../../../spikes/m0/fixtures/fingerprint.json");
         let mut v: serde_json::Value = serde_json::from_str(raw).unwrap();
         v["bandwidth"].as_object_mut().unwrap().remove("single_thread_gbs");
         assert!(serde_json::from_str::<Fingerprint>(&v.to_string()).is_err());

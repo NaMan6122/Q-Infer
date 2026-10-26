@@ -1,0 +1,113 @@
+{
+  "schema": "qinfer/cfp-spike@1",
+  "collected_at": "2026-10-25T21:25:10Z",
+  "identity": {
+    "os": "macos",
+    "os_version": "27.0.1",
+    "os_build": "26A434",
+    "arch": "arm64",
+    "kernel": "27.0.0",
+    "hostname": "HelloWorld-2.local"
+  },
+  "cpu": {
+    "brand": "Apple M5 Pro",
+    "physical_cores": 15,
+    "logical_cores": 15,
+    "perf_levels": [
+      {
+        "name": "Super",
+        "physical_cores": 5,
+        "l1d_bytes": 131072,
+        "l2_bytes": 16777216
+      },
+      {
+        "name": "Performance",
+        "physical_cores": 10,
+        "l1d_bytes": 65536,
+        "l2_bytes": 8388608
+      }
+    ],
+    "isa": {
+      "FEAT_DotProd": 1,
+      "FEAT_I8MM": 1,
+      "FEAT_BF16": 1,
+      "FEAT_SME": 1,
+      "FEAT_SME2": 1,
+      "FEAT_SME2p1": 1,
+      "FEAT_FP8": 0,
+      "SVE": 0,
+      "SVE2": 0
+    },
+    "l3_bytes": null,
+    "max_freq_mhz": null
+  },
+  "gpu": {
+    "model": "Apple M5 Pro",
+    "cores": 16,
+    "metal_support": "spdisplays_metal4",
+    "vendor": null,
+    "unified_memory": true
+  },
+  "memory": {
+    "total_bytes": 25769803776,
+    "swap_used_bytes": 12399285370,
+    "swap_raw": "total = 12288.00M  used = 11824.88M  free = 463.12M  (encrypted)"
+  },
+  "power": {
+    "low_power_mode": null,
+    "thermal_pressure": null,
+    "thermal_source": "unavailable-without-root"
+  },
+  "bandwidth": {
+    "copy": {
+      "method": "copy",
+      "buffer_bytes": 268435456,
+      "reps": 7,
+      "best_gbs": 131.42,
+      "median_gbs": 127.39,
+      "spread_pct": 77.81,
+      "samples_gbs": [
+        29.17,
+        121.05,
+        124.37,
+        131.42,
+        131.04,
+        129.56,
+        127.39
+      ]
+    },
+    "triad": {
+      "method": "triad",
+      "buffer_bytes": 268435456,
+      "reps": 7,
+      "best_gbs": 120.14,
+      "median_gbs": 114.3,
+      "spread_pct": 30.28,
+      "samples_gbs": [
+        114.3,
+        101.55,
+        83.76,
+        105.38,
+        120.14,
+        119.39,
+        117.6
+      ]
+    },
+    "single_thread_gbs": 131.42,
+    "thread_sweep": {
+      "2": 192.94,
+      "4": 216.37,
+      "8": 225.87,
+      "15": 227.99
+    },
+    "best_threads": 15,
+    "headline_gbs": 227.99,
+    "buffer_mib": 256
+  },
+  "provenance": {
+    "bandwidth": "measured",
+    "cpu": "exact",
+    "gpu": "exact",
+    "thermal": "unknown"
+  }
+}

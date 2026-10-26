@@ -16,6 +16,7 @@ pub mod engines;
 pub mod planner;
 pub mod predict;
 pub mod probe;
+pub mod session;
 
 pub use catalog::{Artifact, ByteSource, Catalog, CatalogEntry, CatalogViolation, Coverage, ModelMeta};
 pub use cfp::{parse_major, Violation, MAX_SPREAD_PCT, SUPPORTED_MAJOR};
@@ -23,6 +24,7 @@ pub use engines::{adapter_for_format, detect, Adapter, BenchRequest, BenchResult
 pub use planner::{Constraints, Objective, Plan, PlanRequest, PlanSet, Planner, Rejection};
 pub use predict::{Calibration, KvGeometry, Observation, Prediction, ShapeClass};
 pub use probe::{probe, ProbeConfig, ProbeError, ProbeResult};
+pub use session::{Session, SessionError};
 
 // ---------------------------------------------------------------------------
 // qinfer/cfp@1 — Capability Fingerprint
@@ -590,7 +592,8 @@ mod tests {
     /// N3: the boundary where validation actually happens had no test at all.
     #[test]
     fn workspace_load_refuses_the_committed_fingerprint() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spikes/m0");
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../spikes/m0/fixtures");
         let ws = Workspace::load(root);
         assert!(ws.fingerprint.is_some(), "raw document is kept for display");
         assert!(ws.trusted.is_none(), "but it must never be exposed as trusted");

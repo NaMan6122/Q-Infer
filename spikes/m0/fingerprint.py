@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 
-SCHEMA = "qinfer/cfp-spike@1"
+SCHEMA = "qinfer/cfp@1"
 
 
 # --------------------------------------------------------------------------- #
@@ -286,6 +286,7 @@ def measure_bandwidth(buf_mib: int = 256, reps: int = 7) -> dict[str, Any]:
         # Headline is the saturated figure: the analogue of what a GPU backend
         # can pull from the same DRAM during weight streaming.
         "headline_gbs": sweep[best_tc].best_gbs,
+        "headline_method": "copy",
         "buffer_mib": buf_mib,
     }
 
@@ -294,7 +295,18 @@ def measure_bandwidth(buf_mib: int = 256, reps: int = 7) -> dict[str, Any]:
 # assembly
 # --------------------------------------------------------------------------- #
 
+def _pressure(mem: dict[str, Any]) -> bool:
+    """Swap headroom < 10% means the box is thrashing and the probe is suspect."""
+    raw = mem.get("swap_raw") or ""
+    total = re.search(r"total\s*=\s*([\d.]+)M", raw)
+    free = re.search(r"free\s*=\s*([\d.]+)M", raw)
+    if total and free and float(total.group(1)) > 0:
+        return float(free.group(1)) / float(total.group(1)) < 0.10
+    return False
+
+
 def build_fingerprint() -> dict[str, Any]:
+    mem = collect_memory()
     bw = measure_bandwidth()
     return {
         "schema": SCHEMA,
@@ -302,11 +314,17 @@ def build_fingerprint() -> dict[str, Any]:
         "identity": collect_identity(),
         "cpu": collect_cpu(),
         "gpu": collect_gpu(),
-        "memory": collect_memory(),
+        "memory": mem,
         "power": collect_power(),
         "bandwidth": bw,
         "provenance": {
-            "bandwidth": "measured",
+            # A measurement only counts if it was stable and the box was not
+            # paging. Claiming `measured` otherwise is the lie cfp@1 exists to catch.
+            "bandwidth": (
+                "measured"
+                if bw["copy"]["spread_pct"] <= 15.0 and not _pressure(_mem)
+                else "unknown"
+            ),
             "cpu": "exact",
             "gpu": "exact",
             "thermal": "unknown",
