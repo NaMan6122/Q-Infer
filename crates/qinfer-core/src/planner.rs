@@ -450,7 +450,8 @@ mod tests {
         let c = catalog();
         let cal = calibration();
         let set = planner(&c, &cal).plan(&PlanRequest::default(), &Constraints::new("apple-m5-pro", BIG));
-        assert_eq!(set.plans.len(), 4, "only the four measured artifacts are plannable");
+        // Four measured GGUF artifacts plus the MLX 27B, whose size we also know.
+        assert_eq!(set.plans.len(), 5, "only artifacts whose size we know");
         let rejected_estimates = set
             .rejected
             .iter()
@@ -470,9 +471,12 @@ mod tests {
         let predicted: Vec<&str> = set.plans.iter().map(|p| p.entry_id.as_str()).collect();
         // Measured on this machine: 0.5B 337.6 > OLMoE 254.4 > 3B-Q4 108.8 > 3B-Q8 68.4
         assert_eq!(
-            predicted,
-            vec!["qwen2.5-0.5b-q4_k_m", "olmoe-1b-7b-q4_k_m", "qwen2.5-3b-q4_k_m", "qwen2.5-3b-q8_0"]
+            &predicted[..4],
+            &["qwen2.5-0.5b-q4_k_m", "olmoe-1b-7b-q4_k_m", "qwen2.5-3b-q4_k_m", "qwen2.5-3b-q8_0"]
         );
+        // The MLX 27B has no measurement yet, so it is placed on prediction alone —
+        // largest artifact, lowest throughput, last.
+        assert_eq!(predicted[4], "qwen3.8-27b-4bit-mlx");
     }
 
     #[test]
@@ -493,9 +497,11 @@ mod tests {
         let cal = calibration();
         let set = planner(&c, &cal).plan(&PlanRequest::default(), &Constraints::new("apple-m5-pro", BIG));
         assert_eq!(set.plans[0].fallbacks.len(), 2, "top plan needs two fallbacks");
-        assert_eq!(set.plans[1].fallbacks.len(), 2);
-        assert_eq!(set.plans[2].fallbacks.len(), 1);
-        assert!(set.plans[3].fallbacks.is_empty(), "last plan has nothing to fall back to");
+        assert_eq!(set.plans[set.plans.len() - 2].fallbacks.len(), 1);
+        assert!(
+            set.plans.last().unwrap().fallbacks.is_empty(),
+            "last plan has nothing to fall back to"
+        );
     }
 
     #[test]
@@ -531,7 +537,7 @@ mod tests {
             .iter()
             .filter(|r| matches!(r, Rejection::DoesNotFit { .. }))
             .collect();
-        assert_eq!(fit.len(), 4, "all four plannable artifacts must be rejected for fit");
+        assert_eq!(fit.len(), 5, "all five plannable artifacts must be rejected for fit");
         let msg = fit[0].to_string();
         assert!(msg.contains("needs") && msg.contains("available"), "unhelpful reason: {msg}");
 

@@ -348,8 +348,9 @@ mod tests {
     }
 
     #[test]
-    fn the_seed_has_twelve_entries() {
-        assert_eq!(seed().entries.len(), 12);
+    fn the_seed_has_thirteen_entries() {
+        // 12 GGUF plus the MLX artifact that already exists on the reference host.
+        assert_eq!(seed().entries.len(), 13);
     }
 
     #[test]
@@ -422,7 +423,7 @@ mod tests {
     #[test]
     fn coverage_filters_by_architecture() {
         let c = seed();
-        assert_eq!(c.available_for("apple-m5-pro").len(), 12);
+        assert_eq!(c.available_for("apple-m5-pro").len(), 13);
         assert_eq!(c.available_for("gfx1151").len(), 0, "no AMD coverage yet");
         assert_eq!(c.available_for("sm_121").len(), 0, "no Blackwell coverage yet");
     }
@@ -431,7 +432,9 @@ mod tests {
     fn estimated_artifacts_are_not_plannable() {
         let c = seed();
         let plannable = c.plannable_for("apple-m5-pro");
-        assert_eq!(plannable.len(), 4, "only the four measured artifacts");
+        // The four measured GGUF artifacts plus the MLX 27B (measured size,
+        // manifest hash). The eight estimated ones are excluded.
+        assert_eq!(plannable.len(), 5, "only artifacts whose size we know");
         assert!(plannable.iter().all(|e| e.artifact.bytes_source == ByteSource::Measured));
     }
 
