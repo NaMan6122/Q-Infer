@@ -229,8 +229,8 @@ fn main() {
     // A subcommand means "use the CLI"; anything else (including --snapshot)
     // means "open the dashboard". The binary is one surface with two modes,
     // not two programs.
-    const SUBCOMMANDS: [&str; 9] =
-        ["detect", "plan", "help", "version", "--help", "-h", "--version", "-V", "--json"];
+    const SUBCOMMANDS: [&str; 10] =
+        ["detect", "plan", "spec-lint", "help", "version", "--help", "-h", "--version", "-V", "--json"];
     if let Some(first) = args.first() {
         if SUBCOMMANDS.contains(&first.as_str()) {
             std::process::exit(cli::run(&args));
