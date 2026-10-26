@@ -868,6 +868,9 @@ fn healthy_fingerprint() -> Fingerprint {
         },
         memory: Memory {
             total_bytes: 64 * GIB,
+            // Field added by T-008 so fit arithmetic has an honest denominator;
+            // this fixture predates it and states no availability.
+            available_bytes: None,
             swap_used_bytes: Some(138_936_320),
             swap_raw: Some("total = 2048.00M  used = 132.50M  free = 1915.50M".into()),
         },

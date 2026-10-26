@@ -16,7 +16,14 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use qinfer_core::catalog::Catalog;
+use qinfer_core::planner::{Constraints, PlanRequest, PlanSet, Planner};
+use qinfer_core::predict::{fit, Observation};
 use qinfer_core::{Fingerprint, Workspace};
+
+/// The catalogue ships with the binary. A network fetch belongs in the
+/// provisioner (M1), not in the view.
+const CATALOG_JSON: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.26.json");
 use ratatui::{
     backend::{CrosstermBackend, TestBackend},
     layout::{Constraint, Direction, Layout, Rect},
@@ -63,6 +70,12 @@ struct App {
     ws: Workspace,
     tab: Tab,
     table: TableState,
+    plan_table: TableState,
+    /// Ranked plans for this machine, computed once at load. `None` means we
+    /// could not plan, and `plan_error` says why — never an empty list pretending
+    /// there was nothing to offer.
+    plans: Option<PlanSet>,
+    plan_error: Option<String>,
     status: String,
     refreshed: Instant,
 }
@@ -74,7 +87,21 @@ impl App {
         } else {
             ws.error.clone().unwrap_or_else(|| "no data".into())
         };
-        App { ws, tab: Tab::Overview, table: TableState::default(), status, refreshed: Instant::now() }
+        let (plans, plan_error) = compute_plans(&ws);
+        let mut plan_table = TableState::default();
+        if plans.as_ref().map(|p| !p.plans.is_empty()).unwrap_or(false) {
+            plan_table.select(Some(0));
+        }
+        App {
+            ws,
+            tab: Tab::Overview,
+            table: TableState::default(),
+            plan_table,
+            plans,
+            plan_error,
+            status,
+            refreshed: Instant::now(),
+        }
     }
 
     fn reload(&mut self) {
@@ -84,7 +111,24 @@ impl App {
         } else {
             self.ws.error.clone().unwrap_or_else(|| "no data".into())
         };
+        let (plans, plan_error) = compute_plans(&self.ws);
+        self.plans = plans;
+        self.plan_error = plan_error;
         self.refreshed = Instant::now();
+    }
+
+    fn plan_rows(&self) -> usize {
+        self.plans.as_ref().map(|p| p.plans.len()).unwrap_or(0)
+    }
+
+    fn move_plan(&mut self, delta: isize) {
+        let len = self.plan_rows();
+        if len == 0 {
+            return;
+        }
+        let cur = self.plan_table.selected().unwrap_or(0) as isize;
+        let next = (cur + delta).clamp(0, len as isize - 1) as usize;
+        self.plan_table.select(Some(next));
     }
 
     fn move_row(&mut self, delta: isize) {
@@ -100,6 +144,67 @@ impl App {
     fn row_count(&self) -> usize {
         self.ws.results.as_ref().map(|r| r.rows.len()).unwrap_or(0)
     }
+}
+
+/// Calibrate from the catalogue's own measurements and rank plans for this
+/// machine. Deriving the calibration from the catalogue (rather than from the
+/// spike's JSON) means the dashboard and the planner cannot disagree about what
+/// the hardware did.
+fn compute_plans(ws: &Workspace) -> (Option<PlanSet>, Option<String>) {
+    let Some(fp) = ws.fingerprint.as_ref() else {
+        return (None, Some("no fingerprint to plan against".into()));
+    };
+
+    let catalog = match Catalog::from_json(CATALOG_JSON) {
+        Ok(c) => c,
+        Err(e) => return (None, Some(format!("catalogue parse failed: {e}"))),
+    };
+    if let Err(v) = catalog.validate() {
+        return (None, Some(format!("catalogue invalid: {}", v.first().map(|x| x.to_string()).unwrap_or_default())));
+    }
+
+    let bw = fp.saturated_gbs();
+    if !(bw > 0.0) || !bw.is_finite() {
+        return (None, Some("bandwidth unusable — probe it again".into()));
+    }
+
+    let observations: Vec<Observation> = catalog
+        .entries
+        .iter()
+        .filter(|e| e.is_plannable())
+        .filter_map(|e| {
+            e.measurements.first().map(|m| Observation {
+                bytes_per_token: e.bytes_per_token(),
+                measured_decode_tps: m.decode_tps,
+                shape: e.model.shape,
+            })
+        })
+        .collect();
+
+    if observations.len() < 3 {
+        return (
+            None,
+            Some(format!("{} on-device measurements — 3 are needed to calibrate", observations.len())),
+        );
+    }
+
+    let calibration = fit(&observations, bw);
+    // Older fingerprints predate `arch_id`. Deriving it from the brand is a
+    // deterministic mapping of a stated fact, not a plausible default — and it
+    // is far better than refusing to plan against a machine we can identify.
+    let arch = fp
+        .cpu
+        .arch_id
+        .clone()
+        .unwrap_or_else(|| qinfer_core::collect::slugify(&fp.cpu.brand));
+
+    // `available_bytes` is the honest denominator for fit. Without it we fall
+    // back to half of RAM and the UI says so, rather than assuming the whole box.
+    let available = fp.memory.available_bytes.unwrap_or(fp.memory.total_bytes / 2);
+
+    let planner = Planner::new(&catalog, &calibration, bw);
+    let set = planner.plan(&PlanRequest::default(), &Constraints::new(arch, available));
+    (Some(set), None)
 }
 
 fn clock() -> String {
@@ -198,8 +303,16 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<(
                     KeyCode::Char('3') => app.tab = Tab::Plans,
                     KeyCode::Char('?') => app.tab = Tab::Help,
                     KeyCode::Char('r') => app.reload(),
-                    KeyCode::Down | KeyCode::Char('j') => app.move_row(1),
-                    KeyCode::Up | KeyCode::Char('k') => app.move_row(-1),
+                    KeyCode::Down | KeyCode::Char('j') => match app.tab {
+                        Tab::Bench => app.move_row(1),
+                        Tab::Plans => app.move_plan(1),
+                        _ => {}
+                    },
+                    KeyCode::Up | KeyCode::Char('k') => match app.tab {
+                        Tab::Bench => app.move_row(-1),
+                        Tab::Plans => app.move_plan(-1),
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
@@ -703,35 +816,126 @@ fn render_bench(f: &mut Frame, app: &mut App, area: Rect) {
 
 // --- Plans -----------------------------------------------------------------
 
-fn render_plans(f: &mut Frame, app: &App, area: Rect) {
-    let block = panel(" Plans ");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+fn render_plans(f: &mut Frame, app: &mut App, area: Rect) {
+    let Some(set) = app.plans.as_ref() else {
+        let block = panel(" Plans ");
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        let msg = app.plan_error.clone().unwrap_or_else(|| "no plan".into());
+        let lines = vec![
+            Line::from(Span::styled("  Cannot plan yet.", Style::default().fg(Color::Yellow))),
+            Line::from(""),
+            Line::from(format!("  {msg}")),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Generate a fingerprint and a benchmark first:",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "    python3 spikes/m0/fingerprint.py && python3 spikes/m0/spike.py",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        return;
+    };
 
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  The planner lands in M0 (docs/milestones/m0-advisor.md).",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled("  When it exists, this view will show, per plan:", Style::default())),
-        Line::from(""),
-        Line::from("    · the selected engine, artifact and quantisation"),
-        Line::from("    · predicted TTFT / decode with p10–p90 intervals"),
-        Line::from("    · why  — the rationale, generated from the fingerprint"),
-        Line::from("    · risks — known runtime gaps for this exact machine"),
-        Line::from("    · fallbacks, pre-computed for when verification fails"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  No plans on disk.",
-            Style::default().fg(Color::Yellow),
-        )),
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(9)])
+        .split(area);
+
+    // Same derivation `compute_plans` used, so the header can never claim a
+    // different architecture than the one the plans were ranked against.
+    let arch = app
+        .ws
+        .fingerprint
+        .as_ref()
+        .map(|f| {
+            f.cpu
+                .arch_id
+                .clone()
+                .unwrap_or_else(|| qinfer_core::collect::slugify(&f.cpu.brand))
+        })
+        .unwrap_or_else(|| "unknown".into());
+
+    let header = Row::new(vec![
+        Cell::from(" #"),
+        Cell::from("model"),
+        Cell::from("tok/s"),
+        Cell::from("p10–p90"),
+        Cell::from("peak"),
+    ])
+    .style(Style::default().fg(Color::DarkGray));
+
+    let rows: Vec<Row> = set
+        .plans
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let moe = p.risks.iter().any(|r| r.starts_with("MoE"));
+            Row::new(vec![
+                Cell::from(format!(" {}", i + 1)),
+                Cell::from(truncate(&p.display, 30)),
+                Cell::from(format!("{:.0}", p.predicted.p50))
+                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Cell::from(format!("{:.0}–{:.0}", p.predicted.p10, p.predicted.p90)),
+                Cell::from(format!("{:.1} GiB", p.peak_bytes as f64 / (1u64 << 30) as f64)),
+            ])
+            .style(if moe { Style::default().fg(Color::White) } else { Style::default() })
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(3),
+        Constraint::Min(24),
+        Constraint::Length(7),
+        Constraint::Length(11),
+        Constraint::Length(10),
     ];
-    if let Some(err) = &app.ws.error {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(format!("  {err}"), Style::default().fg(Color::DarkGray))));
+
+    // The title owns its String; `panel` borrows it, so it must outlive the widget.
+    let title = format!(
+        " Plans · {arch} · ctx {} · {} excluded ",
+        set.ctx,
+        set.rejected.len()
+    );
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(panel(&title))
+        .column_spacing(1)
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("▸ ");
+
+    f.render_stateful_widget(table, chunks[0], &mut app.plan_table);
+
+    // Detail for the highlighted plan.
+    let sel = app.plan_table.selected().unwrap_or(0).min(set.plans.len().saturating_sub(1));
+    let block = panel(" Why this plan ");
+    let inner = block.inner(chunks[1]);
+    f.render_widget(block, chunks[1]);
+
+    if let Some(p) = set.plans.get(sel) {
+        let mut lines: Vec<Line> = p
+            .rationale
+            .iter()
+            .take(3)
+            .map(|r| Line::from(vec![Span::styled(" why   ", Style::default().fg(Color::DarkGray)), Span::raw(truncate(r, inner.width as usize - 8))]))
+            .collect();
+        for r in p.risks.iter().take(2) {
+            lines.push(Line::from(vec![
+                Span::styled(" risk  ", Style::default().fg(Color::Yellow)),
+                Span::raw(truncate(r, inner.width as usize - 8)),
+            ]));
+        }
+        if !p.fallbacks.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
+                Span::raw(truncate(&p.fallbacks.join(", "), inner.width as usize - 8)),
+            ]));
+        }
+        f.render_widget(Paragraph::new(lines), inner);
     }
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 // --- Help ------------------------------------------------------------------
