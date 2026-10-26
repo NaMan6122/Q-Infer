@@ -450,8 +450,8 @@ mod tests {
         let c = catalog();
         let cal = calibration();
         let set = planner(&c, &cal).plan(&PlanRequest::default(), &Constraints::new("apple-m5-pro", BIG));
-        // Four measured GGUF artifacts plus the MLX 27B, whose size we also know.
-        assert_eq!(set.plans.len(), 5, "only artifacts whose size we know");
+        // Four measured GGUF artifacts plus two MLX artifacts.
+        assert_eq!(set.plans.len(), 6, "only artifacts whose size we know");
         let rejected_estimates = set
             .rejected
             .iter()
@@ -470,13 +470,21 @@ mod tests {
 
         let predicted: Vec<&str> = set.plans.iter().map(|p| p.entry_id.as_str()).collect();
         // Measured on this machine: 0.5B 337.6 > OLMoE 254.4 > 3B-Q4 108.8 > 3B-Q8 68.4
+        // The three artifacts with measurements keep their measured order, and
+        // the MLX 3B slots above the llama.cpp Q4_K_M of the same model —
+        // because it reads fewer bytes per token (REPORT §11).
         assert_eq!(
-            &predicted[..4],
-            &["qwen2.5-0.5b-q4_k_m", "olmoe-1b-7b-q4_k_m", "qwen2.5-3b-q4_k_m", "qwen2.5-3b-q8_0"]
+            &predicted[..5],
+            &[
+                "qwen2.5-0.5b-q4_k_m",
+                "olmoe-1b-7b-q4_k_m",
+                "qwen2.5-3b-4bit-mlx",
+                "qwen2.5-3b-q4_k_m",
+                "qwen2.5-3b-q8_0",
+            ]
         );
-        // The MLX 27B has no measurement yet, so it is placed on prediction alone —
-        // largest artifact, lowest throughput, last.
-        assert_eq!(predicted[4], "qwen3.8-27b-4bit-mlx");
+        // The 27B has no measurement; largest artifact, lowest throughput, last.
+        assert_eq!(predicted[5], "qwen3.8-27b-4bit-mlx");
     }
 
     #[test]
@@ -511,9 +519,9 @@ mod tests {
         let three_gib = 3 * (1 << 30);
         let set = planner(&c, &cal).plan(&PlanRequest::default(), &Constraints::new("apple-m5-pro", three_gib));
 
-        // 0.5B (~0.54 GiB) and 3B-Q4 (~2.28 GiB incl. headroom) fit in 3 GiB;
-        // the 3.6 and 4.2 GiB artifacts do not.
-        assert_eq!(set.plans.len(), 2);
+        // 0.5B (~0.54 GiB), the MLX 3B (~1.8 GiB) and 3B-Q4 (~2.28 GiB) fit in
+        // 3 GiB; the 3.6 GiB Q8_0 and the larger artifacts do not.
+        assert_eq!(set.plans.len(), 3);
         let fit = set
             .rejected
             .iter()
@@ -537,7 +545,7 @@ mod tests {
             .iter()
             .filter(|r| matches!(r, Rejection::DoesNotFit { .. }))
             .collect();
-        assert_eq!(fit.len(), 5, "all five plannable artifacts must be rejected for fit");
+        assert_eq!(fit.len(), 6, "all six plannable artifacts must be rejected for fit");
         let msg = fit[0].to_string();
         assert!(msg.contains("needs") && msg.contains("available"), "unhelpful reason: {msg}");
 

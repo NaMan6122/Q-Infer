@@ -178,3 +178,50 @@ The main experiment used only dense models. MoE was the largest untested assumpt
 ### Consequence
 
 Rank ordering across dense and MoE models survives its first real test. The remaining risk is now narrower and better stated: **large MoEs on high-bandwidth machines**, not MoE as a class.
+
+---
+
+## 11. MLX vs llama.cpp on the same model — 2026-10-26
+
+The assumption worth testing was "MLX is much faster on Apple Silicon". Two adapters exist (`engines.rs`), both runtimes are installed on the reference host, so it became measurable.
+
+### Method
+
+Same model family, same weights *semantics*, different containers:
+
+| | llama.cpp | MLX |
+|---|---|---|
+| artifact | `Qwen2.5-3B-Instruct-Q4_K_M.gguf` | `mlx-community/Qwen2.5-3B-Instruct-4bit` |
+| bytes/token | 2 104 932 768 (1.96 GiB) | **1 736 293 090** (1.62 GiB) |
+| bits/param | 4.85 | 4.25 (4-bit + fp16 scale per group of 64) |
+
+`llama-bench -p 512 -n 128 -r 5 -ngl 99` vs `mlx_lm.generate --max-tokens 128 --temp 0` (629-token prompt).
+
+### Result
+
+| | llama.cpp | MLX | delta |
+|---|---|---|---|
+| decode | 108.75 tok/s | **129.84 tok/s** | **+19.4 %** |
+| prefill | 2 798.3 tok/s | 579.9 tok/s | **−79 %** |
+| peak memory | — | 2.499 GB | |
+| bytes read per token | 2.105 GB | 1.736 GB | −17.5 % |
+| **implied `k_cal`** | **1.157** | **1.175** | +1.6 % |
+
+### What this actually says
+
+**The decode win is a packing win, not a kernel win.** MLX reads 21.2 % fewer bytes and decodes 19.4 % faster; the residual attributable to the backend is **−1.8 %**. Per byte streamed from DRAM, the two engines are equivalent on this machine — and `k_cal` agrees to 1.6 %.
+
+That is a direct validation of the two-parameter model: `k_cal` behaves like a property of the **memory path**, not of the framework's marketing. It is also the answer to "is MLX much more powerful?" — *not per byte*. The advantage is that its default quantisation is denser.
+
+**Prefill is the opposite story and matters.** llama.cpp's batched prompt processing is ~4.8× faster here. For chat, irrelevant. For RAG, summarisation, or long documents, decisive.
+
+### Caveats — this is not a controlled experiment
+
+- **Different quantisers.** Q4_K_M (4.85 bit, mixed k-quants) vs MLX 4-bit affine group-64 (4.25 bit). Fewer bits may also mean lower quality; the catalogue carries no measured quality delta for either, so nothing here proves the MLX artifact is quality-equivalent.
+- **Prompt lengths differ** (512 vs 629 tokens).
+- **`mlx_lm.generate`'s prefill number** reflects its own single-pass path, not a chunked-prefill implementation tuned for throughput.
+- **One model, one machine, one run each.**
+
+### Consequence for the product
+
+The planner should not carry a "prefer MLX" rule, and it does not. It carries bytes-per-token, which is what actually determines decode — and a measured `k_cal` per backend. The choice between engines then reduces to **which quantisation packs tighter at acceptable quality**, and **which phase the workload is bound by**. That is a question the catalogue can answer and a preference cannot.
