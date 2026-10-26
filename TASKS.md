@@ -11,9 +11,9 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | T-001 | `cfp@1` schema as Rust types + validation | LOW | M0 | **DONE** — PR #1, 3 Critic rounds |
 | T-002 | Bandwidth probe: thread sweep + pressure guard | MEDIUM | M0 | **DONE** — merged #2, verified 7/7 |
 | T-003 | macOS collectors with the documented traps | HIGH | M0 | **DONE** — merged #5, verified 6/6 |
-| T-004 | Catalog v1 — 12 entries, arch coverage | HIGH | M0 | READY — next |
+| T-004 | Catalog v1 — 12 entries, arch coverage | HIGH | M0 | **DONE** — merged #11, 18 tests |
 | T-005 | Predictor + `k_cal` store | MEDIUM | M0 | **DONE** — merged #6, verified 8/8 |
-| T-006 | Planner: constraint solver + rationale | LOW | M0 | READY |
+| T-006 | Planner: constraint solver + rationale | LOW | M0 | **DONE** — PR #12, rank order reproduced |
 | T-007 | CLI: `detect`, `plan`, `--json`, exit codes | HIGH | M0 | READY |
 | T-008 | TUI wired to core (not spike JSON) | HIGH | M0 | READY |
 | T-009 | Spec structural validator (mechanises G1) | HIGH | M0 | READY |
