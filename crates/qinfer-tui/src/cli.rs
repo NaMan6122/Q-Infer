@@ -27,12 +27,15 @@ pub mod exit {
     pub const FAILED: i32 = 6;
     /// The command line itself was wrong.
     pub const USAGE: i32 = 64;
+    /// A spec failed its structural gate (T-009).
+    pub const SPEC_INVALID: i32 = 5;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Detect,
     Plan,
+    SpecLint,
     Help,
     Version,
 }
@@ -71,6 +74,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
     let command = match it.next().map(String::as_str) {
         Some("detect") => Command::Detect,
         Some("plan") => Command::Plan,
+        Some("spec-lint") => Command::SpecLint,
         Some("help") | Some("--help") | Some("-h") => Command::Help,
         Some("version") | Some("--version") | Some("-V") => Command::Version,
         Some(other) => return Err(ParseError::UnknownCommand(other.to_string())),
@@ -175,7 +179,79 @@ pub fn run(args: &[String]) -> i32 {
         }
         Command::Detect => cmd_detect(&parsed),
         Command::Plan => cmd_plan(&parsed),
+        Command::SpecLint => cmd_spec_lint(&parsed),
     }
+}
+
+/// Mechanises G1 across the repository's own specs (T-009).
+fn cmd_spec_lint(parsed: &Parsed) -> i32 {
+    use qinfer_core::spec::{lint_adr, lint_milestone, lint_tasks, LintSummary, Severity};
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut findings = Vec::new();
+
+    let read = |p: std::path::PathBuf| std::fs::read_to_string(p).ok();
+
+    if let Some(md) = read(root.join("TASKS.md")) {
+        findings.extend(lint_tasks(&md, "TASKS.md"));
+    }
+    for entry in std::fs::read_dir(root.join("docs/adr")).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            if let Some(md) = read(path.clone()) {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("adr").to_string();
+                if name != "README.md" {
+                    findings.extend(lint_adr(&md, &name));
+                }
+            }
+        }
+    }
+    for entry in std::fs::read_dir(root.join("docs/milestones")).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("m").to_string();
+            if name == "README.md" {
+                continue;
+            }
+            if let Some(md) = read(path.clone()) {
+                findings.extend(lint_milestone(&md, &name));
+            }
+        }
+    }
+
+    let summary = LintSummary::from(findings);
+    let code = if summary.is_clean() { exit::OK } else { exit::SPEC_INVALID };
+
+    if parsed.json {
+        let data = serde_json::json!({
+            "errors": summary.errors,
+            "warnings": summary.warnings,
+            "findings": summary.findings.iter().map(|f| serde_json::json!({
+                "file": f.file, "line": f.line, "rule": f.code(),
+                "severity": match f.severity { Severity::Error => "error", Severity::Warning => "warning" },
+                "message": f.message,
+            })).collect::<Vec<_>>(),
+        });
+        if summary.is_clean() {
+            println!("{}", envelope("spec-lint", data));
+        } else {
+            println!("{}", serde_json::json!({
+                "schema": SCHEMA, "command": "spec-lint", "ok": false,
+                "data": data, "error": { "exit": code, "message": format!("{} spec error(s)", summary.errors) }
+            }));
+        }
+        return code;
+    }
+
+    for f in &summary.findings {
+        let sev = match f.severity { Severity::Error => "error  ", Severity::Warning => "warning" };
+        println!("{sev} {} {}:{} {}", f.code(), f.file, f.line, f.message);
+    }
+    println!(
+        "\n{} error(s), {} warning(s) across TASKS.md, docs/adr, docs/milestones",
+        summary.errors, summary.warnings
+    );
+    code
 }
 
 fn load_workspace() -> Workspace {
@@ -382,6 +458,7 @@ fn print_help() {
     println!("  qinfer                 open the dashboard");
     println!("  qinfer detect [--json] [--offline]");
     println!("  qinfer plan   [--json] [--model <family>] [--ctx N] [--objective <o>] [--offline]");
+    println!("  qinfer spec-lint [--json]      structural gate over the repo's own specs");
     println!("  qinfer help | version\n");
     println!("OBJECTIVES: max_speed · balanced (default) · max_quality · max_context · fit\n");
     println!("EXIT CODES:");

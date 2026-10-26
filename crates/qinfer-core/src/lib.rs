@@ -17,6 +17,7 @@ pub mod planner;
 pub mod predict;
 pub mod probe;
 pub mod session;
+pub mod spec;
 
 pub use catalog::{Artifact, ByteSource, Catalog, CatalogEntry, CatalogViolation, Coverage, ModelMeta};
 pub use cfp::{parse_major, Violation, MAX_SPREAD_PCT, SUPPORTED_MAJOR};

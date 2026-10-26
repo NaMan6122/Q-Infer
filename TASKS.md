@@ -16,7 +16,7 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | T-006 | Planner: constraint solver + rationale | LOW | M0 | **DONE** — PR #12, rank order reproduced |
 | T-007 | CLI: `detect`, `plan`, `--json`, exit codes | HIGH | M0 | **DONE** — PR #16, 9 tests |
 | T-008 | TUI wired to core (not spike JSON) | HIGH | M0 | **DONE** — PR #13, Plans tab reads `PlanSet` |
-| T-009 | Spec structural validator (mechanises G1) | HIGH | M0 | READY |
+| T-009 | Spec structural validator (mechanises G1) | HIGH | M0 | **DONE** — PR #17, 12 tests |
 | T-011 | MLX engine adapter (second backend) | MEDIUM | M0 | **DONE** — PR #14, 10 tests |
 | T-010 | Second spike: MoE + CUDA | HIGH | M0 | MoE ✅ · CUDA BLOCKED — hardware |
 
@@ -140,14 +140,44 @@ Verification raised four non-blocking findings; all four were fixed rather than 
 
 ## T-009 — Spec structural validator
 
-Mechanises G1(a): Given/When/Then present, Risks non-empty or justified `NONE`, Rollback filled, dependency chain resolved.
-**Test Evidence:** `tests/spec_lint.rs` against this repository's own specs.
-**Rollback:** tooling only.
+Mechanises G1(a) so the Critic reviews judgement, not formatting.
+
+**Acceptance criteria**
+- *Given* a task block, *when* linted, *then* it must carry acceptance criteria, Test Evidence and Rollback, or be rejected.
+- *Given* a criterion written as prose ("it should work"), *when* linted, *then* it is rejected as not falsifiable.
+- *Given* a summary-table row with no `LOW`/`MEDIUM`/`HIGH`, *when* linted, *then* reversibility is reported missing.
+- *Given* an ADR with no `Alternatives considered`, *when* linted, *then* it is rejected — G2 requires ≥2 evaluated options.
+- *Given* a **warning** (e.g. no negative criterion), *when* linted, *then* the gate still passes. A linter that fails on style gets bypassed.
+- *Given* **this repository**, *when* linted, *then* zero errors — a linter that fails on its own specs is worthless.
+
+**Test Evidence:** `crates/qinfer-core/src/spec.rs` — 12 tests, including the repo linting itself via `include_str!`.
+**Rollback:** tooling only; delete the module.
 
 ---
 
 ## T-010 — Second spike: MoE + CUDA
 
-**Status:** BLOCKED — requires ≥24 GB free unified memory (MoE) and any CUDA host.
-**Why it matters:** `t₀` dominance is the entire MoE story and is untested; the CUDA result could show the Metal finding is an artifact.
-**Exit:** a report with MAPE for a 30B-A3B model and for three dense models on CUDA.
+**Status:** PARTIAL — MoE done (OLMoE, §10). CUDA blocked: no host available.
+
+**Acceptance criteria**
+- *Given* a 30B-class MoE (Qwen3-30B-A3B, 128 experts), *when* benchmarked, *then* its decode is within ±25 % of the two-parameter prediction.
+- *Given* three dense models on a CUDA host, *when* benchmarked, *then* MAPE is within ±25 %, proving the Metal result is not a platform artefact.
+- *Given* the same model on Metal and CUDA, *when* compared, *then* the difference is attributable to bytes or `k_cal`, not to an unexplained residual.
+- *Given* a machine that spills, *when* benchmarked, *then* the prediction is **invalidated**, not reported with a 10× error.
+
+**Test Evidence:** a `REPORT.md` addendum with measured-vs-predicted per model. MoE half satisfied (§10).
+**Rollback:** evidence only.
+
+---
+
+## T-011 — MLX engine adapter
+
+**Acceptance criteria**
+- *Given* a `gguf` artifact, *when* an adapter is requested, *then* llama.cpp is selected and MLX is not.
+- *Given* an `mlx` artifact, *when* an adapter is requested, *then* MLX is selected.
+- *Given* engine output that is not a measurement (traceback, zero, missing decode row), *when* parsed, *then* `None` is returned rather than a fabricated number.
+- *Given* neither runtime installed, *when* detection runs, *then* both report absent — presence is never assumed.
+- *Given* the same model on both engines, *when* measured, *then* the decode difference is explained by bytes-per-token, not by the framework name.
+
+**Test Evidence:** `crates/qinfer-core/src/engines.rs` — 10 tests; `spikes/m0/REPORT.md` §11.
+**Rollback:** revert the commit; adapters are additive.
