@@ -17,7 +17,8 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | T-007 | CLI: `detect`, `plan`, `--json`, exit codes | HIGH | M0 | READY |
 | T-008 | TUI wired to core (not spike JSON) | HIGH | M0 | **DONE** — PR #13, Plans tab reads `PlanSet` |
 | T-009 | Spec structural validator (mechanises G1) | HIGH | M0 | READY |
-| T-010 | Second spike: MoE + CUDA | HIGH | M0 | BLOCKED — hardware |
+| T-011 | MLX engine adapter (second backend) | MEDIUM | M0 | **DONE** — PR #14, 10 tests |
+| T-010 | Second spike: MoE + CUDA | HIGH | M0 | MoE ✅ · CUDA BLOCKED — hardware |
 
 **Review state.** T-001 cleared three Critic rounds (`BLOCK`, `BLOCK`, `PASS-WITH-CHANGES`). T-002/T-003/T-005 cleared independent verification: 23 tests written by a separate agent against the acceptance criteria, fixtures deliberately different from the implementers' (an M4 Max rather than the M5 Pro), **all criteria VERIFIED, no behavioural defect found**.
 

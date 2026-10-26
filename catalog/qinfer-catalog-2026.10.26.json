@@ -541,6 +541,48 @@
         "value": null,
         "method": "publisher-card"
       }
+    },
+    {
+      "id": "qwen3.8-27b-4bit-mlx",
+      "family": "qwen3.5",
+      "display": "Qwen3.8 27B (MLX 4-bit)",
+      "artifact": {
+        "format": "mlx",
+        "quant": "4bit",
+        "bytes": 16081488731,
+        "bytes_source": "measured",
+        "sha256": "c24a0f0b8759b64d6298cf4063ce17e0256eedc3c9b11067cdca43acdd4fa96f",
+        "licence": "apache-2.0",
+        "gated": false,
+        "publisher": "mlx-community"
+      },
+      "model": {
+        "total_params": 27000000000,
+        "active_params": 27000000000,
+        "shape": "dense",
+        "kv": {
+          "layers": 64,
+          "kv_heads": 4,
+          "head_dim": 256
+        },
+        "ctx_max": 262144,
+        "hidden": 5120,
+        "vocab": 248320
+      },
+      "coverage": [
+        {
+          "arch_id": "apple-m5-pro",
+          "backend": "mlx",
+          "status": "declared",
+          "evidence": null
+        }
+      ],
+      "measurements": [],
+      "quality": {
+        "metric": "perplexity_delta",
+        "value": null,
+        "method": "publisher-card"
+      }
     }
   ]
 }
