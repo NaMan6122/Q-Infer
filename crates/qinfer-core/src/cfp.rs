@@ -403,6 +403,7 @@ mod tests {
             gpu: Gpu { unified_memory: true, ..Gpu::default() },
             memory: Memory {
                 total_bytes: 24 << 30,
+                available_bytes: Some(12 << 30),
                 swap_used_bytes: Some(1024 * 1024 * 1024),
                 // 8 GiB free of 8 GiB => healthy headroom
                 swap_raw: Some("total = 8192.00M  used = 0.00M  free = 8192.00M".into()),

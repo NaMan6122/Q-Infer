@@ -269,7 +269,7 @@ pub mod macos {
                 isa: collect_isa(r),
             },
             gpu,
-            memory: Memory { total_bytes, swap_used_bytes, swap_raw },
+            memory: Memory { total_bytes, available_bytes: None, swap_used_bytes, swap_raw },
             bandwidth: Bandwidth {
                 copy: Some(Sample {
                     method: "copy".into(),

@@ -103,6 +103,11 @@ pub struct Gpu {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Memory {
     pub total_bytes: u64,
+    /// What the planner is actually allowed to use. Specified in PRD §5.1 and
+    /// required before fit arithmetic can be honest — `None` here means the
+    /// planner must fall back to a stated assumption, not to the total.
+    #[serde(default)]
+    pub available_bytes: Option<u64>,
     #[serde(default)]
     pub swap_used_bytes: Option<u64>,
     #[serde(default)]
@@ -558,7 +563,7 @@ mod tests {
                 max_freq_mhz: None,
             },
             gpu: Gpu::default(),
-            memory: Memory { total_bytes: 24 * 1024 * 1024 * 1024, swap_used_bytes: None, swap_raw: None },
+            memory: Memory { total_bytes: 24 * 1024 * 1024 * 1024, available_bytes: None, swap_used_bytes: None, swap_raw: None },
             bandwidth: Bandwidth {
                 copy: None,
                 triad: None,
@@ -601,7 +606,7 @@ mod tests {
             identity: Identity { os: "macos".into(), os_version: None, os_build: None, arch: "arm64".into(), kernel: None, hostname: None },
             cpu: Cpu { brand: "x".into(), physical_cores: 1, logical_cores: 1, arch_id: None, perf_levels: vec![], isa: BTreeMap::new(), l3_bytes: None, max_freq_mhz: None },
             gpu: Gpu::default(),
-            memory: Memory { total_bytes: 8 << 30, swap_used_bytes: Some(6 << 30), swap_raw: None },
+            memory: Memory { total_bytes: 8 << 30, available_bytes: None, swap_used_bytes: Some(6 << 30), swap_raw: None },
             bandwidth: Bandwidth { copy: None, triad: None, single_thread_gbs: 10.0, thread_sweep: BTreeMap::new(), best_threads: Some(1), headline_gbs: 100.0, headline_method: Some("copy".into()), buffer_mib: None },
             power: Power::default(),
             provenance: BTreeMap::new(),

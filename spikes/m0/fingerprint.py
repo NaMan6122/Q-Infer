@@ -108,6 +108,10 @@ def collect_cpu() -> dict[str, Any]:
 
     return {
         "brand": brand,
+        # `arch_id` is what the planner keys on (ADR-0002: facts, not brands).
+        # Derived from the brand string rather than a lookup table so it stays
+        # correct on chips we have never seen.
+        "arch_id": re.sub(r"[^a-z0-9]+", "-", (brand or "").lower()).strip("-"),
         "physical_cores": physical,
         "logical_cores": logical,
         "perf_levels": perf_levels,
@@ -152,8 +156,31 @@ def collect_memory() -> dict[str, Any]:
         m = re.search(r"used\s*=\s*([\d.]+)M", swap_raw)
         if m:
             swap_used = int(float(m.group(1)) * 1024 * 1024)
+
+    # `available` is the honest denominator for fit arithmetic (PRD §5.1).
+    # macOS has no single "available" figure; free + inactive + speculative +
+    # purgeable is the closest thing to what a new process could obtain.
+    available = None
+    vm = sh(["vm_stat"]) or ""
+    page_m = re.search(r"page size of (\d+)", vm)
+    page_size = int(page_m.group(1)) if page_m else 16384
+
+    def pages(name: str) -> int:
+        m = re.search(rf"{name}:\s+(\d+)\.", vm)
+        return int(m.group(1)) if m else 0
+
+    if vm:
+        reclaimable = (
+            pages("Pages free")
+            + pages("Pages inactive")
+            + pages("Pages speculative")
+            + pages("Pages purgeable")
+        )
+        available = reclaimable * page_size
+
     return {
         "total_bytes": total,
+        "available_bytes": available,
         "swap_used_bytes": swap_used,
         "swap_raw": swap_raw,
     }
