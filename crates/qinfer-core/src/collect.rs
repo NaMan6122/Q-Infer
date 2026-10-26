@@ -204,6 +204,39 @@ pub mod macos {
             .collect()
     }
 
+    /// macOS has no single "available" figure. free + inactive + speculative +
+    /// purgeable is the closest thing to what a new process could actually
+    /// obtain, and it is far more honest than half of RAM.
+    pub fn parse_vm_stat(vm: &str) -> Option<u64> {
+        let page_size = vm.lines().find_map(|l| {
+            let idx = l.find("page size of")?;
+            l[idx + "page size of".len()..].split_whitespace().next()?.parse::<u64>().ok()
+        })?;
+
+        let page = |name: &str| -> u64 {
+            vm.lines()
+                .find_map(|l| {
+                    let t = l.trim();
+                    if t.starts_with(name) {
+                        t.split(':').nth(1)?.trim().trim_end_matches('.').parse().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0)
+        };
+
+        let reclaimable = page("Pages free")
+            + page("Pages inactive")
+            + page("Pages speculative")
+            + page("Pages purgeable");
+        if reclaimable == 0 {
+            None
+        } else {
+            Some(reclaimable * page_size)
+        }
+    }
+
     /// Collect a fingerprint on macOS. `probe` is the T-002 bandwidth result.
     pub fn collect(r: &impl Runner, probe: &ProbeResult) -> Result<Fingerprint, CollectError> {
         let arch = r.run("uname", &["-m"]).ok_or(CollectError::MissingArchitecture)?;
@@ -269,7 +302,12 @@ pub mod macos {
                 isa: collect_isa(r),
             },
             gpu,
-            memory: Memory { total_bytes, available_bytes: None, swap_used_bytes, swap_raw },
+            memory: Memory {
+                total_bytes,
+                available_bytes: r.run("vm_stat", &[]).and_then(|s| macos::parse_vm_stat(&s)),
+                swap_used_bytes,
+                swap_raw,
+            },
             bandwidth: Bandwidth {
                 copy: Some(Sample {
                     method: "copy".into(),
@@ -458,6 +496,23 @@ mod tests {
         let gpu = macos::parse_gpu("not json");
         assert_eq!(gpu.model, None);
         assert!(!gpu.unified_memory);
+    }
+
+    #[test]
+    fn vm_stat_yields_an_available_figure() {
+        let vm = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
+                  Pages free:                              7173.\n\
+                  Pages inactive:                        274417.\n\
+                  Pages speculative:                       1186.\n\
+                  Pages purgeable:                         3196.\n";
+        let avail = macos::parse_vm_stat(vm).expect("available");
+        assert_eq!(avail, (7173 + 274_417 + 1186 + 3196) * 16384);
+    }
+
+    #[test]
+    fn vm_stat_without_a_page_size_is_refused() {
+        assert_eq!(macos::parse_vm_stat("Pages free: 10."), None);
+        assert_eq!(macos::parse_vm_stat(""), None);
     }
 
     #[test]

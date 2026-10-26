@@ -4,7 +4,7 @@
 //! obtained. It deserialises what the fingerprint layer produced and hands it
 //! to the predictor, the planner and the TUI. Nothing here shells out.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -31,7 +31,7 @@ pub use session::{Session, SessionError};
 // qinfer/cfp@1 — Capability Fingerprint
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Fingerprint {
     pub schema: String,
     #[serde(default)]
@@ -48,7 +48,7 @@ pub struct Fingerprint {
     pub provenance: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Identity {
     pub os: String,
     #[serde(default)]
@@ -64,7 +64,7 @@ pub struct Identity {
     pub hostname: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cpu {
     pub brand: String,
     pub physical_cores: u32,
@@ -83,7 +83,7 @@ pub struct Cpu {
     pub max_freq_mhz: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PerfLevel {
     #[serde(default)]
     pub name: Option<String>,
@@ -93,7 +93,7 @@ pub struct PerfLevel {
     pub l2_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Gpu {
     #[serde(default)]
     pub model: Option<String>,
@@ -107,7 +107,7 @@ pub struct Gpu {
     pub unified_memory: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Memory {
     pub total_bytes: u64,
     /// What the planner is actually allowed to use. Specified in PRD §5.1 and
@@ -131,7 +131,7 @@ pub enum PressureState {
     Unknown,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Power {
     #[serde(default)]
     pub low_power_mode: Option<bool>,
@@ -141,7 +141,7 @@ pub struct Power {
     pub thermal_source: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Bandwidth {
     #[serde(default)]
     pub copy: Option<Sample>,
@@ -170,7 +170,7 @@ pub struct Bandwidth {
     pub buffer_mib: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Sample {
     pub method: String,
     pub best_gbs: f64,
@@ -188,7 +188,7 @@ pub struct Sample {
 // M0 spike results
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SpikeResults {
     pub bandwidth_gbs: f64,
     #[serde(default)]
@@ -200,7 +200,7 @@ pub struct SpikeResults {
     pub rows: Vec<SpikeRow>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Fit {
     pub t0_ms: f64,
     pub eps: f64,
@@ -211,13 +211,13 @@ pub struct Fit {
     pub n_models: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Mape {
     pub naive_pct: f64,
     pub two_param_pct: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SpikeRow {
     pub model: String,
     pub gib: f64,
