@@ -348,6 +348,15 @@ fn cmd_plan(parsed: &Parsed) -> i32 {
         }
     };
 
+    // AT-0.7: a stale catalogue must warn, offline or not. Age is measured
+    // against the generation date rather than assumed to be current.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let catalog_age_days = catalog.age_days(now);
+    let catalog_stale = catalog.is_stale(now, 90);
+
     let session = match Session::new(fp, catalog) {
         Ok(s) => s,
         Err(e) => {
@@ -404,6 +413,8 @@ fn cmd_plan(parsed: &Parsed) -> i32 {
             "plans": plans,
             "rejected": rejected,
             "offline": parsed.offline,
+            "catalog_age_days": catalog_age_days,
+            "catalog_stale": catalog_stale,
         });
         println!("{}", envelope("plan", data));
         return code;
@@ -416,7 +427,14 @@ fn cmd_plan(parsed: &Parsed) -> i32 {
         format_gib(session.available_bytes()),
         if session.availability_is_assumed() { " (assumed: half of RAM)" } else { "" }
     );
-    println!("calibration: {}\n", session.calibration_summary());
+    println!("calibration: {}", session.calibration_summary());
+    if catalog_stale {
+        println!(
+            "⚠ catalogue is {} days old — plans may reference artifacts that have moved. Run `qinfer catalog update` when online.",
+            catalog_age_days.unwrap_or(-1)
+        );
+    }
+    println!();
 
     if set.plans.is_empty() {
         println!("no feasible plan.");
