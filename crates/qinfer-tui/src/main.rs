@@ -8,6 +8,8 @@
 //! That exists so the layout can be reviewed in CI and over a pipe, and so
 //! "does the dashboard look right" never requires a human at a TTY.
 
+mod cli;
+
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
 
@@ -221,8 +223,19 @@ fn clock() -> String {
 // entry points
 // ---------------------------------------------------------------------------
 
-fn main() -> io::Result<()> {
+fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // A subcommand means "use the CLI"; anything else (including --snapshot)
+    // means "open the dashboard". The binary is one surface with two modes,
+    // not two programs.
+    const SUBCOMMANDS: [&str; 9] =
+        ["detect", "plan", "help", "version", "--help", "-h", "--version", "-V", "--json"];
+    if let Some(first) = args.first() {
+        if SUBCOMMANDS.contains(&first.as_str()) {
+            std::process::exit(cli::run(&args));
+        }
+    }
 
     // --snapshot WxH  → render one frame offscreen and print it
     if let Some(pos) = args.iter().position(|a| a == "--snapshot") {
@@ -234,10 +247,17 @@ fn main() -> io::Result<()> {
             .and_then(|p| args.get(p + 1))
             .map(|s| s.as_str())
             .unwrap_or("overview");
-        return snapshot(w, h, tab);
+        if let Err(e) = snapshot(w, h, tab) {
+            eprintln!("qinfer: snapshot failed: {e}");
+            std::process::exit(1);
+        }
+        return;
     }
 
-    run_tui()
+    if let Err(e) = run_tui() {
+        eprintln!("qinfer: {e}");
+        std::process::exit(1);
+    }
 }
 
 fn parse_dims(s: &str) -> Option<(u16, u16)> {
