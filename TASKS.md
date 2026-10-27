@@ -21,6 +21,13 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | T-009 | Spec structural validator (mechanises G1) | HIGH | M0 | **DONE** — PR #17, 12 tests |
 | T-011 | MLX engine adapter (second backend) | MEDIUM | M0 | **DONE** — PR #14, 10 tests |
 | T-010 | Second spike: MoE + CUDA | HIGH | M0 | MoE ✅ · CUDA BLOCKED — hardware |
+| T-012 | Memory budget from the device, not half of RAM | MEDIUM | M0 | **DONE** — 10 unit + 11 contract tests |
+| T-013 | Micro-operation suite (GPU stream, GEMV, GEMM, ANE) | MEDIUM | M0 | **DONE** — 8 unit tests, live on M5 Pro |
+| T-014 | Sweet-spot frontier: capability vs speed, knee marked | MEDIUM | M0 | **DONE** — 11 tests, live on M5 Pro |
+| T-015 | Usability floor on the frontier | LOW | M0 | **DONE** — 6 tests, changes the answer |
+| T-016 | Setup ladder: staged run with injected measurements | MEDIUM | M0 | **DONE** — 8 tests |
+| T-017 | Dashboard: Frontier tab and a measured memory budget | MEDIUM | M0 | **DONE** — renders at 46–100 cols |
+| T-018 | Dashboard: Setup tab carries the ladder | MEDIUM | M0 | **DONE** — 8 snapshot tests, live on M5 Pro |
 
 **Review state.** T-001 cleared three Critic rounds (`BLOCK`, `BLOCK`, `PASS-WITH-CHANGES`). T-002/T-003/T-005 cleared independent verification: 23 tests written by a separate agent against the acceptance criteria, fixtures deliberately different from the implementers' (an M4 Max rather than the M5 Pro), **all criteria VERIFIED, no behavioural defect found**.
 
@@ -183,3 +190,117 @@ Mechanises G1(a) so the Critic reviews judgement, not formatting.
 
 **Test Evidence:** `crates/qinfer-core/src/engines.rs` — 10 tests; `spikes/m0/REPORT.md` §11.
 **Rollback:** revert the commit; adapters are additive.
+
+---
+
+## T-012 — Memory budget from the device, not half of RAM
+
+Before this task, `session` answered "how much memory may this workload use?" with **half of RAM**, stated as an assumption and then consumed as a fact. On the reference 24 GiB M5 Pro that is 12.0 GiB, which rejected `qwen3.8-27b-4bit-mlx` at 14.98 GiB — a model sitting in this machine's own cache. An assumption that refuses the correct answer is indistinguishable from a hardware limit.
+
+**Acceptance criteria**
+- *Given* a GPU device report carrying `max_recommended_working_set_size`, *when* a session resolves its budget, *then* the plan budget is that figure and not half of physical RAM.
+- *Given* a device report whose working set exceeds physical RAM, *when* resolved, *then* the figure is refused and resolution falls through to the reclaimable figure rather than being clamped.
+- *Given* neither a device report nor a `vm_stat` figure, *when* resolved, *then* the source is `AssumedFraction` and provenance is `unknown`.
+- *Given* a machine whose configured swap is over 90% used, *when* resolved even with a valid working set, *then* provenance is `unknown` — a paging machine is not a measurement.
+- *Given* headroom is unknown, *when* `fits_now` is asked, *then* it returns `None` and **must not** return `false`.
+- *Given* the same device report under different current load, *when* resolved twice, *then* `plan_budget()` is identical — a plan is not a snapshot.
+
+**Test Evidence:** `crates/qinfer-core/src/space.rs` — 10 unit tests; `crates/qinfer-core/tests/space_contract.rs` — 11 contract tests written against the criteria on a 32 GiB fixture deliberately different from the module's 24 GiB one. Live: `cargo run --release -p qinfer-core --example measure` resolves 17.8 GiB against a 12.0 GiB assumption (1.48x) and admits the 27B.
+**Rollback:** additive module; deleting the `space` field from `Session` restores the stated-fraction behaviour.
+
+---
+
+## T-013 — Micro-operation suite
+
+The predictor needs numbers no spec sheet provides: the bandwidth the **device** achieves, the throughput of the compute-bound phase, and whether the neural-engine path exists at all. `k_cal` was carrying all three as one free parameter; these ops remove it.
+
+**Acceptance criteria**
+- *Given* a machine with MLX installed, *when* the probe runs, *then* it reports GPU stream bandwidth, quantised GEMV bandwidth at a weight size above last-level cache, and batched bf16 matmul throughput, each with method, repetition count and spread.
+- *Given* the reference M5 Pro, *when* the probe runs, *then* the GPU stream figure agrees with the saturated CPU probe within 10%.
+- *Given* an op the probe could not perform, *when* parsed, *then* it is `Refused` with a reason and a fix, and **must not** be reported as `0.0`.
+- *Given* a weight matrix under 128 MiB, *when* the GEMV op runs, *then* it declines rather than reporting a cache-resident figure that over-states bandwidth fivefold.
+- *Given* non-JSON output from the probe, *when* parsed, *then* every requested op is refused and the device block is absent.
+
+**Test Evidence:** `crates/qinfer-core/src/microops.rs` — 8 tests, including the live M5 Pro payload verbatim. Measured on the reference machine: GPU stream 257.9 GB/s (20.7% spread), GEMV q4 256.4 GB/s (1.7%), GEMM bf16 23.1 TFLOP/s (5.5%), ANE unreachable. `k_cal` fell from 1.175 to 1.031 once the probe saturated — the original coefficient was an artefact of an under-saturated CPU probe, which is PRD Q11 answered by measurement rather than argument.
+**Rollback:** additive module; the planner falls back to the stored `k_cal` when no micro-op report is supplied.
+
+---
+
+## T-014 — Sweet-spot frontier
+
+`Planner` ranks by throughput, and on a bandwidth-bound machine the fastest artifact is always the smallest one: on the reference M5 Pro the top-ranked plan is a 0.5B at 339 tok/s. A quality *floor* does not fix it either, because `quality_placeholder` keys on quantisation rather than model size, so a 0.5B Q4 and a 27B Q4 both score 0.93. The missing axis is capability, which with speed makes the question a curve rather than a ranking.
+
+**Acceptance criteria**
+- *Given* a plan set and a catalogue, *when* the frontier is computed, *then* a candidate that is both slower and less capable than another is absent from it.
+- *Given* three or more frontier points, *when* the knee is found, *then* it is the point furthest above the chord joining the two ends, and **must not** depend on a weighting constant the product could not defend.
+- *Given* an MoE entry, *when* its capability prior is computed, *then* it uses total parameters, and the active-parameter reading must not be the one used.
+- *Given* a catalogue whose `quality.value` is null everywhere, *when* a frontier is produced, *then* every point is labelled `prior (params)` and the skew is reported in `notes`.
+- *Given* fewer than three frontier points, *when* `recommended()` is called, *then* it returns `None` and `reason()` explains why rather than inventing a winner.
+
+**Test Evidence:** `crates/qinfer-core/src/sweetspot.rs` — 17 tests. Live on the M5 Pro the frontier is Qwen3 Coder 30B-A3B (123 tok/s, cap 1.00), OLMoE (245, 0.64), 0.5B (339, 0.00); the three 3B variants are correctly dominated.
+**Rollback:** additive module; `Planner` output is unchanged and remains the throughput-ranked answer.
+
+---
+
+## T-015 — Usability floor on the frontier
+
+The knee answers a question about a curve; the user asks a different one. On the reference M5 Pro they diverge: the knee is a 7B at 245 tok/s, the answer is a 30B-A3B at 123, and both are far above the rate at which anyone reads. Past the floor extra speed is worth nothing, so capability should decide.
+
+**Acceptance criteria**
+- *Given* a frontier and a floor, *when* the recommendation is taken, *then* it is the most capable point whose predicted decode is at or above the floor.
+- *Given* a point predicted at exactly the floor, *when* the recommendation is taken, *then* it is admissible — the comparison **must not** lose a model to rounding.
+- *Given* a floor nothing reaches, *when* the recommendation is taken, *then* it returns nothing and the reason names the fastest available rate, rather than silently falling back to the fastest plan.
+- *Given* a recommendation above the floor, *when* its reason is rendered, *then* it names the floor and the alternative it traded away, so the choice is auditable.
+- *Given* the knee and the floor-constrained answer differ, *when* both are shown, *then* both are labelled distinctly — a surface must not present one as the other.
+
+**Test Evidence:** `crates/qinfer-core/src/sweetspot.rs` — 6 additional tests. Live: the knee is OLMoE at 245 tok/s; the 20 tok/s answer is Qwen3 Coder 30B-A3B at 123 tok/s, and the output says why.
+**Rollback:** `DEFAULT_USABLE_TPS` is a constant; setting it to 0.0 restores pure knee behaviour.
+
+---
+
+## T-016 — Setup ladder
+
+A wizard asks questions; a ladder measures. The order is imposed by the data dependencies, not by the PRD's diagram: the fingerprint cannot be collected before the bandwidth probe, because it contains the probe's result.
+
+**Acceptance criteria**
+- *Given* a run, *when* it completes, *then* the stages occur in dependency order and the run ends with `Done`.
+- *Given* a stage, *when* it starts, *then* `Begin` is emitted before the work so a slow rung is visible while it is slow, not only after it finishes.
+- *Given* the fingerprint collection fails, *when* the ladder runs, *then* it stops at `Identify`, emits `Failed` naming the stage, and **must not** emit a choice.
+- *Given* a device report, *when* the budget rung runs, *then* the budget comes from the device's working set rather than half of RAM.
+- *Given* a floor nothing reaches, *when* the ladder finishes, *then* the frontier is still emitted so the surface can explain why nothing qualifies.
+- *Given* the same catalogue and measurements, *when* the ladder is run twice, *then* it produces the same events.
+
+**Test Evidence:** `crates/qinfer-core/src/setup.rs` — 8 tests against a fake `Measurements`, so the whole ladder runs on a machine with no GPU, no MLX and no macOS.
+**Rollback:** additive module; the CLI and dashboard do not call it yet.
+
+---
+
+## T-017 — Dashboard: Frontier tab and a measured budget
+
+The ranked plan list cannot answer "what should I run": ordering by throughput always crowns the smallest artifact. The dashboard needed the second axis, and it was still budgeting with a half-of-RAM fallback, contradicting T-012.
+
+**Acceptance criteria**
+- *Given* a machine with plans, *when* the Frontier tab renders, *then* it shows the curve, marks the floor-constrained recommendation, and states that capability is a prior.
+- *Given* an 84-column terminal, *when* the tab renders, *then* the provenance column is shed; at 64 the capability column goes too; below that the name truncates — and no row **must** wrap onto a second line.
+- *Given* a terminal between 46 and 100 columns, *when* any tab renders, *then* no line exceeds the terminal width and the frame stays closed.
+- *Given* a fingerprint with no `available_bytes`, *when* the dashboard budgets, *then* it uses `space::resolve` and labels the source rather than assuming half of RAM.
+- *Given* a fingerprint that cannot be planned against, *when* the Frontier tab opens, *then* it prints the reason rather than an empty panel.
+
+**Test Evidence:** `crates/qinfer-tui/tests/snapshot.rs`; also rendered and inspected at 100x22, 80x20, 64x18 and 46x16.
+**Rollback:** revert the commit; the tab is additive and the Overview tab is unchanged.
+
+---
+
+## T-018 — Dashboard: the Setup tab carries the ladder
+
+The last piece that made T-016 merely a library. Pressing Enter is the entire "few clicks" promise, and until it worked the dashboard was still showing whoever last ran `fingerprint.py` rather than the machine in front of the user.
+
+**Acceptance criteria**
+- *Given* the Setup tab with nothing measured this session, *when* it renders, *then* it shows the five rungs pending and states plainly that nothing here is a measurement, rather than showing months-old numbers with confidence.
+- *Given* Enter on the Setup tab, *when* pressed, *then* a ladder run starts on a worker thread and each rung fills in as its event arrives.
+- *Given* a run already in flight, *when* Enter is pressed again, *then* no second run starts — two ladders would compete for the bandwidth they are trying to measure.
+- *Given* a completed run, *when* the other tabs re-derive, *then* they use the fingerprint that run collected and **must not** fall back to the file on disk.
+- *Given* any terminal from 20 to 100 columns, *when* the header renders, *then* the machine name and the tab bar are both still present; the tab bar sheds names for abbreviations for digits before it loses a tab.
+
+**Test Evidence:** `crates/qinfer-tui/tests/snapshot.rs` — 8 tests including `the_header_survives_a_short_terminal`; `crates/qinfer-core/src/setup.rs` — 8 tests; live end-to-end via `cargo run -p qinfer-core --example ladder`, which resolves 17.8 GiB and chooses Qwen3 Coder 30B-A3B at 123 tok/s on the reference machine.
+**Rollback:** revert the commit; the tab is additive and Enter is the only binding added.
