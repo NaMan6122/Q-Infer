@@ -36,6 +36,10 @@ cargo run -q -p qinfer-tui
 
 # or render one frame headlessly
 cargo run -q -p qinfer-tui -- --snapshot 100x30 --tab bench
+
+# build once and link `qinfer` onto your PATH (symlink, so rebuilds are live)
+./build.sh
+qinfer                          # dashboard; `qinfer help` for the CLI
 ```
 
 ## Try the evidence
