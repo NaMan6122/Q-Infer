@@ -255,6 +255,25 @@ has no measured quality.
 
 Tests: **242 pass.**
 
+### v0.9 — the capability axis becomes a measurement (T-020)
+
+`sweetspot` has ranked on `log10(total_params)` since v0.5, with a note admitting
+it. It now reads `catalogue.quality`, orients error metrics so lower is always
+better, and switches the whole frontier to measured points as soon as any exist.
+
+The first policy was wrong and worth recording: it required **every** candidate to
+be scored before the measured axis switched on, which would have left the axis off
+indefinitely — half the catalogue is GGUF and `bench` drives `mlx_lm`. The
+shipped policy builds the frontier only from measured candidates and names the
+rest as excluded, so it gets smaller and honest instead of larger and wrong.
+
+The catalogue is now writable: scores live in the document rather than a sidecar,
+so they are reviewed, diffed and pinned with the artifact they describe. Unknown
+ids and non-finite values are refused, and a round-trip test holds the shipped
+catalogue to its own format.
+
+Tests: **251 pass.**
+
 Also fixed in passing: the micro-op spread estimator was `(max-min)/max`, which
 let one descheduled sample condemn a good measurement (67% spread on a stable
 3 ms op). Now interquartile about the median, with a discarded warm-up — GEMV
