@@ -21,7 +21,7 @@
 //! says which it is, and the frontier is not allowed to present a prior as a
 //! measurement.
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogEntry};
 use crate::planner::{Plan, PlanSet};
 
 /// Below this decode rate an interactive coding session feels laggy, so every
@@ -225,21 +225,70 @@ fn prior(params: u64) -> Option<f64> {
     Some((params as f64).log10())
 }
 
+/// A catalogue entry's measured quality, oriented so that **higher is better**
+/// on every metric the catalogue can carry.
+///
+/// `code_nll` and perplexity are error measures, so they are negated; a metric
+/// that is already a score (accuracy, pass rate) is used as-is. Returns the
+/// metric name too, so a surface can say which one it is quoting.
+fn quality_value(entry: &CatalogEntry) -> Option<(f64, &str)> {
+    let q = entry.quality.as_ref()?;
+    let v = q.value?;
+    if !v.is_finite() {
+        return None;
+    }
+    let error_metric = q.metric.contains("nll") || q.metric.contains("perplexity");
+    Some((if error_metric { -v } else { v }, q.metric.as_str()))
+}
+
 /// Build the frontier from a planner result.
 pub fn frontier(set: &PlanSet, catalog: &Catalog) -> SweetSpot {
     let budget_bytes = set.plans.first().map(|p| p.peak_bytes).unwrap_or(0);
 
+    let pairs: Vec<(&Plan, &CatalogEntry)> = set
+        .plans
+        .iter()
+        .filter_map(|p| {
+            catalog
+                .entries
+                .iter()
+                .find(|e| e.id == p.entry_id)
+                .map(|e| (p, e))
+        })
+        .collect();
+
+    // The axis is chosen ONCE for the whole set. Mixing a measured score for one
+    // candidate with a parameter-count prior for another produces an ordering
+    // that is neither a measurement nor a shape, and nothing downstream could
+    // tell which.
+    //
+    // So once anything has been measured, the frontier is built only from
+    // candidates that have been measured, and the rest are named as excluded. The
+    // alternative — requiring every entry to be scored before any of it counts —
+    // would keep the measured axis switched off indefinitely, because half the
+    // catalogue is GGUF and not yet scoreable.
+    let scored_count = pairs.iter().filter(|(_, e)| quality_value(e).is_some()).count();
+    let measured_axis = scored_count > 0;
+    let axis = if measured_axis {
+        CapabilitySource::Measured
+    } else {
+        CapabilitySource::Prior
+    };
+    let considered: Vec<(&Plan, &CatalogEntry)> = if measured_axis {
+        pairs.iter().copied().filter(|(_, e)| quality_value(e).is_some()).collect()
+    } else {
+        pairs.clone()
+    };
+
     let mut raw: Vec<(Plan, f64, u64, CapabilitySource)> = Vec::new();
-    for plan in &set.plans {
-        let Some(entry) = catalog.entries.iter().find(|e| e.id == plan.entry_id) else {
-            continue;
-        };
+    for (plan, entry) in &considered {
         let params = entry.model.total_params;
-        let (value, source) = match prior(params) {
-            Some(v) => (v, CapabilitySource::Prior),
+        let value = if measured_axis { quality_value(entry).map(|(v, _)| v) } else { prior(params) };
+        let (value, source) = match value {
+            Some(v) => (v, axis),
             None => (0.0, CapabilitySource::Unknown),
         };
-        raw.push((plan.clone(), value, params, source));
+        raw.push(((*plan).clone(), value, params, source));
     }
 
     // Normalise capability to 0..1 across the candidate set.
@@ -283,12 +332,33 @@ pub fn frontier(set: &PlanSet, catalog: &Catalog) -> SweetSpot {
 
     let knee = find_knee(&frontier);
     let mut notes = Vec::new();
-    if frontier.iter().any(|p| p.source == CapabilitySource::Prior) {
-        notes.push(
-            "capability is a parameter-count prior, not a measurement — the catalogue carries no \
-             measured quality for any entry, so the knee is a shape rather than a verdict"
-                .into(),
-        );
+    match axis {
+        CapabilitySource::Measured => {
+            let metric = considered
+                .iter()
+                .filter_map(|(_, e)| quality_value(e).map(|(_, m)| m))
+                .next()
+                .unwrap_or("unknown");
+            let excluded = pairs.len().saturating_sub(scored_count);
+            notes.push(format!(
+                "capability is a measured `{metric}` on a fixed corpus, where lower error is \
+                 better; {scored_count} candidate(s) scored"
+            ));
+            if excluded > 0 {
+                notes.push(format!(
+                    "{excluded} candidate(s) excluded from the frontier: no measured code score, \
+                     and ranking them on a parameter-count prior beside measured points would \
+                     order neither"
+                ));
+            }
+        }
+        _ => {
+            notes.push(format!(
+                "capability is a parameter-count prior, not a measurement — none of the {} \
+                 candidate(s) carry a measured code score yet",
+                pairs.len()
+            ));
+        }
     }
     if frontier.len() < 3 {
         notes.push(format!(
@@ -651,10 +721,120 @@ mod tests {
         assert!(s.notes.iter().any(|n| n.contains("prior")), "the caveat must be present: {:?}", s.notes);
     }
 
-    /// Compile-time-ish guard: the module must not be able to claim a measured
-    /// capability while the catalogue has none.
+    fn scored_entry(id: &str, total: u64, nll: f64) -> CatalogEntry {
+        let mut e = entry(id, total, total);
+        e.quality = Some(Quality {
+            metric: "code_nll".into(),
+            value: Some(nll),
+            method: "bench@422tokens".into(),
+        });
+        e
+    }
+
+    fn set_of(ids: &[(&str, f64)]) -> PlanSet {
+        PlanSet {
+            plans: ids.iter().map(|(id, tps)| plan_for(id, *tps)).collect(),
+            rejected: vec![],
+            objective: Objective::Balanced,
+            ctx: 4096,
+        }
+    }
+
+    /// When every candidate has been scored, the axis stops being a guess. This
+    /// is the transition the whole benchmark exists to enable.
     #[test]
-    fn no_catalogue_entry_reports_a_measured_quality_yet() {
+    fn a_fully_measured_catalogue_uses_the_measured_axis() {
+        let catalog = Catalog {
+            schema: "qinfer/catalog@1".into(),
+            version: "t".into(),
+            generated_at: String::new(),
+            note: String::new(),
+            entries: vec![
+                scored_entry("small", 3_000_000_000, 0.98),
+                scored_entry("large", 27_000_000_000, 0.90),
+            ],
+        };
+        let s = frontier(&set_of(&[("small", 130.0), ("large", 16.0)]), &catalog);
+        assert!(s.frontier.iter().all(|p| p.source == CapabilitySource::Measured));
+        assert!(s.notes.iter().any(|n| n.contains("measured")), "{:?}", s.notes);
+        // Lower NLL is better, so the 27B must sit at the capable end.
+        let large = s.frontier.iter().find(|p| p.plan.entry_id == "large").expect("large");
+        let small = s.frontier.iter().find(|p| p.plan.entry_id == "small").expect("small");
+        assert!(large.capability > small.capability, "0.90 nll beats 0.98 nll");
+    }
+
+    /// Partial coverage is the dangerous case: one measured score beside one
+    /// guess, on the same axis, with nothing downstream able to tell them apart.
+    /// The unscored candidate leaves the frontier rather than being ranked on a
+    /// prior next to a measurement.
+    #[test]
+    fn an_unscored_candidate_is_excluded_rather_than_ranked_on_a_guess() {
+        let catalog = Catalog {
+            schema: "qinfer/catalog@1".into(),
+            version: "t".into(),
+            generated_at: String::new(),
+            note: String::new(),
+            entries: vec![
+                scored_entry("scored", 3_000_000_000, 0.98),
+                entry("unscored", 27_000_000_000, 27_000_000_000),
+            ],
+        };
+        let s = frontier(&set_of(&[("scored", 130.0), ("unscored", 16.0)]), &catalog);
+        let ids: Vec<&str> = s.frontier.iter().map(|p| p.plan.entry_id.as_str()).collect();
+        assert_eq!(ids, vec!["scored"], "a guess must not sit beside a measurement");
+        assert!(s.frontier.iter().all(|p| p.source == CapabilitySource::Measured));
+        let note = s.notes.join(" ");
+        assert!(note.contains("1 candidate(s) excluded"), "{note}");
+        assert!(note.contains("parameter-count prior"), "{note}");
+    }
+
+    /// With nothing measured the frontier still works — on a stated prior.
+    #[test]
+    fn an_unscored_catalogue_falls_back_to_the_prior_for_everyone() {
+        let catalog = Catalog {
+            schema: "qinfer/catalog@1".into(),
+            version: "t".into(),
+            generated_at: String::new(),
+            note: String::new(),
+            entries: vec![
+                entry("a", 3_000_000_000, 3_000_000_000),
+                entry("b", 27_000_000_000, 27_000_000_000),
+            ],
+        };
+        let s = frontier(&set_of(&[("a", 130.0), ("b", 16.0)]), &catalog);
+        assert_eq!(s.frontier.len(), 2);
+        assert!(s.frontier.iter().all(|p| p.source == CapabilitySource::Prior));
+        assert!(s.notes.join(" ").contains("none of the 2 candidate(s)"));
+    }
+
+    #[test]
+    fn a_perplexity_metric_is_oriented_the_same_way_as_nll() {
+        // Both are error measures: higher is worse, so both must be negated.
+        let mut e = entry("x", 3_000_000_000, 3_000_000_000);
+        e.quality = Some(Quality {
+            metric: "code_perplexity".into(),
+            value: Some(2.67),
+            method: "bench".into(),
+        });
+        let (v, metric) = quality_value(&e).expect("scored");
+        assert!(v < 0.0, "an error metric must be negated, got {v}");
+        assert_eq!(metric, "code_perplexity");
+
+        // A score metric is already oriented.
+        let mut s = entry("y", 3_000_000_000, 3_000_000_000);
+        s.quality = Some(Quality { metric: "pass_at_1".into(), value: Some(0.42), method: "x".into() });
+        assert!((quality_value(&s).unwrap().0 - 0.42).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_entry_with_no_quality_block_has_no_measured_value() {
+        let e = entry("x", 3_000_000_000, 3_000_000_000);
+        assert_eq!(quality_value(&e), None);
+    }
+
+    /// Guard on the label vocabulary itself.
+    #[test]
+    fn capability_source_labels_are_stable() {
         let _unused = Calibration {
             shape: ShapeClass::Dense,
             t0_ms: 1.0,
