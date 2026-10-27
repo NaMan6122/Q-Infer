@@ -8,12 +8,15 @@
 use crate::catalog::{Catalog, CatalogViolation};
 use crate::planner::{Constraints, PlanRequest, PlanSet, Planner};
 use crate::predict::{fit, Calibration, Observation};
+use crate::space::{self, DeviceInfo, Space};
 use crate::Fingerprint;
 
 /// Fraction of RAM we assume usable when the fingerprint does not say.
-/// A stated assumption is acceptable; a silent one is not — the planner puts
-/// this in the rationale whenever it is used.
-pub const ASSUMED_AVAILABLE_FRACTION: f64 = 0.5;
+///
+/// Re-exported rather than redefined: the fallback now lives with the rest of
+/// the memory-budget logic in [`crate::space`], so there is exactly one place
+/// that decides what an assumption looks like (T-012).
+pub use crate::space::ASSUMED_AVAILABLE_FRACTION;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionError {
@@ -49,10 +52,27 @@ pub struct Session {
     fingerprint: Fingerprint,
     catalog: Catalog,
     calibration: Calibration,
+    /// How much memory this machine will actually give a workload. Resolved once,
+    /// so every surface quotes the same budget (T-012).
+    space: Space,
 }
 
 impl Session {
     pub fn new(fingerprint: Fingerprint, catalog: Catalog) -> Result<Self, SessionError> {
+        Self::with_device(fingerprint, catalog, None)
+    }
+
+    /// Build a session with the GPU's own report of its working-set ceiling.
+    ///
+    /// `device` is `None` on a machine with no GPU probe or on CI, which is a
+    /// normal input and degrades through `space`'s documented chain. Passing a
+    /// report here is what lets a 24 GiB machine plan a 17 GiB model instead of
+    /// refusing it at half of RAM.
+    pub fn with_device(
+        fingerprint: Fingerprint,
+        catalog: Catalog,
+        device: Option<&DeviceInfo>,
+    ) -> Result<Self, SessionError> {
         if let Err(v) = catalog.validate() {
             return Err(SessionError::InvalidCatalog(v));
         }
@@ -67,8 +87,9 @@ impl Session {
             return Err(SessionError::InsufficientMeasurements { found: observations.len() });
         }
 
+        let space = space::resolve(&fingerprint, device);
         let calibration = fit(&observations, bw);
-        Ok(Session { fingerprint, catalog, calibration })
+        Ok(Session { fingerprint, catalog, calibration, space })
     }
 
     /// Build a session from already-measured observations, without a catalogue
@@ -85,12 +106,19 @@ impl Session {
         if observations.len() < crate::predict::MIN_OBSERVATIONS {
             return Err(SessionError::InsufficientMeasurements { found: observations.len() });
         }
+        let space = space::resolve(&fingerprint, None);
         let calibration = fit(observations, bw);
-        Ok(Session { fingerprint, catalog, calibration })
+        Ok(Session { fingerprint, catalog, calibration, space })
     }
 
     pub fn fingerprint(&self) -> &Fingerprint {
         &self.fingerprint
+    }
+
+    /// The resolved memory budget, so the CLI, the dashboard and the planner all
+    /// quote the same number for the same machine.
+    pub fn space(&self) -> &Space {
+        &self.space
     }
 
     pub fn catalog(&self) -> &Catalog {
@@ -115,17 +143,20 @@ impl Session {
             .unwrap_or_else(|| crate::collect::slugify(&self.fingerprint.cpu.brand))
     }
 
-    /// Bytes the planner may use. Falls back to a stated fraction of RAM.
+    /// Bytes the planner may use: the GPU's working-set ceiling when we have it,
+    /// otherwise the documented fallback chain. Never silently half of RAM.
     pub fn available_bytes(&self) -> u64 {
-        self.fingerprint
-            .memory
-            .available_bytes
-            .unwrap_or((self.fingerprint.memory.total_bytes as f64 * ASSUMED_AVAILABLE_FRACTION) as u64)
+        self.space.plan_budget()
     }
 
-    /// True when `available_bytes()` is an assumption rather than a measurement.
+    /// True when the budget rests on a stated assumption rather than on
+    /// something the operating system told us.
+    ///
+    /// Deliberately keyed on the *source*, not on pressure: "is this an
+    /// assumption?" and "is this figure trustworthy right now?" are different
+    /// questions, and `space.provenance()` answers the second.
     pub fn availability_is_assumed(&self) -> bool {
-        self.fingerprint.memory.available_bytes.is_none()
+        !self.space.source.is_measured()
     }
 
     pub fn plans(&self, req: &PlanRequest) -> PlanSet {
@@ -170,7 +201,7 @@ mod tests {
     use super::*;
     use crate::predict::ShapeClass;
 
-    const SEED: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.26.json");
+    const SEED: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.27.json");
 
     fn fingerprint(available: Option<u64>) -> Fingerprint {
         let raw = include_str!("../../../spikes/m0/fixtures/fingerprint.json");

@@ -13,19 +13,27 @@ pub mod catalog;
 pub mod cfp;
 pub mod collect;
 pub mod engines;
+pub mod microops;
 pub mod planner;
 pub mod predict;
 pub mod probe;
 pub mod session;
+pub mod setup;
+pub mod space;
 pub mod spec;
+pub mod sweetspot;
 
 pub use catalog::{Artifact, ByteSource, Catalog, CatalogEntry, CatalogViolation, Coverage, ModelMeta};
 pub use cfp::{parse_major, Violation, MAX_SPREAD_PCT, SUPPORTED_MAJOR};
 pub use engines::{adapter_for_format, detect, Adapter, BenchRequest, BenchResult, Engine};
+pub use microops::{MicroOp, OpId, Outcome, Report};
 pub use planner::{Constraints, Objective, Plan, PlanRequest, PlanSet, Planner, Rejection};
 pub use predict::{Calibration, KvGeometry, Observation, Prediction, ShapeClass};
 pub use probe::{probe, ProbeConfig, ProbeError, ProbeResult};
 pub use session::{Session, SessionError};
+pub use setup::{Measurements, SetupEvent, Stage};
+pub use space::{DeviceInfo, Space, SpaceSource};
+pub use sweetspot::{CapabilitySource, Point, SweetSpot, DEFAULT_USABLE_TPS};
 
 // ---------------------------------------------------------------------------
 // qinfer/cfp@1 — Capability Fingerprint

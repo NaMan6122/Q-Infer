@@ -332,7 +332,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
 
-    const SEED: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.26.json");
+    const SEED: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.27.json");
 
     fn seed() -> Catalog {
         Catalog::from_json(SEED).expect("seed catalogue must parse")
@@ -347,10 +347,18 @@ mod tests {
         assert_eq!(seed().validate(), Ok(()));
     }
 
+    /// The catalogue's shape matters, not its current size: a test that pins
+    /// the entry count turns every catalogue update into a red build without
+    /// protecting anything.
     #[test]
-    fn the_seed_has_fourteen_entries() {
-        // 12 GGUF plus two MLX artifacts (the installed 27B and the 3B control).
-        assert_eq!(seed().entries.len(), 14);
+    fn the_seed_covers_dense_moe_and_both_formats() {
+        let c = seed();
+        assert!(c.entries.len() >= 14, "the seed plus coding models, got {}", c.entries.len());
+        assert!(c.entries.iter().any(|e| e.model.shape == ShapeClass::Dense));
+        assert!(c.entries.iter().any(|e| e.model.shape == ShapeClass::Moe));
+        assert!(c.entries.iter().any(|e| e.artifact.format == "gguf"));
+        assert!(c.entries.iter().any(|e| e.artifact.format == "mlx"));
+        assert!(c.entries.iter().any(|e| e.family.starts_with("qwen2.5-coder")));
     }
 
     #[test]
@@ -423,7 +431,9 @@ mod tests {
     #[test]
     fn coverage_filters_by_architecture() {
         let c = seed();
-        assert_eq!(c.available_for("apple-m5-pro").len(), 14);
+        // Every shipped entry declares Apple coverage, so the filter must be a
+        // no-op for this arch and total for the others.
+        assert_eq!(c.available_for("apple-m5-pro").len(), c.entries.len());
         assert_eq!(c.available_for("gfx1151").len(), 0, "no AMD coverage yet");
         assert_eq!(c.available_for("sm_121").len(), 0, "no Blackwell coverage yet");
     }
@@ -432,10 +442,17 @@ mod tests {
     fn estimated_artifacts_are_not_plannable() {
         let c = seed();
         let plannable = c.plannable_for("apple-m5-pro");
-        // Four measured GGUF artifacts plus two MLX artifacts (measured size,
-        // manifest hash). The eight estimated ones are excluded.
-        assert_eq!(plannable.len(), 6, "only artifacts whose size we know");
-        assert!(plannable.iter().all(|e| e.artifact.bytes_source == ByteSource::Measured));
+        // The invariant is not "six" — it is that an estimate never reaches the
+        // planner. A locally measured artifact and a publisher-declared one are
+        // both admissible; a derived guess is not.
+        assert!(!plannable.is_empty());
+        assert!(
+            plannable.iter().all(|e| e.artifact.bytes_source != ByteSource::Estimated),
+            "a size derived from params x bits must never be planned on"
+        );
+        assert!(c.entries.iter().any(|e| e.artifact.bytes_source == ByteSource::Measured));
+        assert!(c.entries.iter().any(|e| e.artifact.bytes_source == ByteSource::Publisher));
+        assert!(c.entries.iter().any(|e| e.artifact.bytes_source == ByteSource::Estimated));
     }
 
     #[test]
@@ -472,7 +489,7 @@ mod tests {
     #[test]
     fn staleness_is_computed_from_the_generated_date() {
         let c = seed();
-        let gen_days = days_from_civil(2026, 10, 26);
+        let gen_days = days_from_civil(2026, 10, 27);
         let now = (gen_days as u64 + 30) * 86_400;
         assert_eq!(c.age_days(now), Some(30));
         assert!(!c.is_stale(now, 90));
