@@ -30,10 +30,32 @@ use crate::engines::Argv;
 /// The probe program. One `python3` subprocess, never imported.
 pub const PROBE_SCRIPT: &str = include_str!("bench_probe.py");
 
+/// Score a block of code as **continuation**.
+pub const MODE_RAW: &str = "raw";
+
+/// Score only the assistant span of a coding request, under the model's own chat
+/// template.
+///
+/// This is the mode that matches what a coding assistant is asked to do, and it
+/// separates good models from poor ones far more sharply than `raw` does — 2x
+/// between a 3B and a 14B, against 18% on continuation.
+///
+/// It is **not yet the catalogue's metric**, for two reasons found by running it:
+/// a multimodal model's template does not yield a locatable assistant span (the
+/// probe refuses rather than guessing), and an agentic coder's template renders a
+/// bare conversation that omits the tool-aware framing the model was trained for,
+/// which depresses its score for reasons that have nothing to do with its quality.
+pub const MODE_INSTRUCTION: &str = "instruction";
+
+pub const MODES: [&str; 2] = [MODE_RAW, MODE_INSTRUCTION];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodeScore {
     /// What was scored: an artifact path or a Hub repo id.
     pub model: String,
+    /// `raw` or `instruction`. Part of the score's identity: the corpus hash
+    /// already separates the two corpora, and this makes the difference legible.
+    pub mode: String,
     /// Identifies the text. Two scores are comparable only if this matches.
     pub corpus_sha: String,
     pub tokens: u32,
@@ -122,21 +144,26 @@ impl std::fmt::Display for BenchError {
     }
 }
 
-pub fn argv(model: &str) -> Argv {
+pub fn argv(model: &str, mode: &str) -> Argv {
     Argv {
         program: "python3".into(),
-        args: vec!["-c".into(), PROBE_SCRIPT.into(), model.to_string()],
+        args: vec!["-c".into(), PROBE_SCRIPT.into(), model.to_string(), mode.to_string()],
     }
 }
 
 /// Score one model. A probe that cannot start is an error, never a zero.
-pub fn run(runner: &impl Runner, model: &str) -> Result<CodeScore, BenchError> {
-    let a = argv(model);
+pub fn run(runner: &impl Runner, model: &str, mode: &str) -> Result<CodeScore, BenchError> {
+    let a = argv(model, mode);
     let args: Vec<&str> = a.args.iter().map(String::as_str).collect();
     let out = runner.run(&a.program, &args).ok_or_else(|| BenchError::NotRun {
         detail: format!("`{}` produced no output", a.render()),
     })?;
     parse(&out, model)
+}
+
+/// Score in the default mode.
+pub fn run_raw(runner: &impl Runner, model: &str) -> Result<CodeScore, BenchError> {
+    run(runner, model, MODE_RAW)
 }
 
 /// Parse the probe's JSON. Pure, so every failure path is testable without MLX.
@@ -203,6 +230,13 @@ pub fn parse(json: &str, model: &str) -> Result<CodeScore, BenchError> {
 
     Ok(CodeScore {
         model: model.to_string(),
+        mode: v
+            .get("mode")
+            .and_then(|m| m.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| BenchError::Unusable {
+                detail: "no mode in the payload — a score must say which corpus it used".into(),
+            })?,
         corpus_sha,
         tokens,
         mean_nll,
@@ -220,7 +254,7 @@ mod tests {
 
     /// Captured verbatim from the reference machine (Qwen2.5-3B-Instruct-4bit).
     /// `nll_per_byte` = 0.982607 x 422 / 1710, the corpus being 1710 bytes.
-    const LIVE: &str = r#"{"corpus_sha":"599e9c50dff219e0","bytes":1710,"tokens":422,"mean_nll":0.982607,"nll_per_byte":0.242491,"perplexity":2.6714,"load_s":1.201,"forward_s":0.159,"dtype":"Device(gpu, 0)"}"#;
+    const LIVE: &str = r#"{"mode":"raw","corpus_sha":"599e9c50dff219e0","bytes":1710,"tokens":422,"mean_nll":0.982607,"nll_per_byte":0.242491,"perplexity":2.6714,"load_s":1.201,"forward_s":0.159,"dtype":"Device(gpu, 0)"}"#;
 
     #[test]
     fn a_live_payload_parses() {
@@ -241,7 +275,7 @@ mod tests {
     fn comparison_uses_the_per_byte_figure_not_the_per_token_one() {
         let qwen25 = parse(LIVE, "qwen2.5-3b").unwrap(); // 422 tokens, 0.9826/token
         let qwen3 = parse(
-            r#"{"corpus_sha":"599e9c50dff219e0","bytes":1710,"tokens":464,"mean_nll":0.634,"nll_per_byte":0.172033,"perplexity":1.89}"#,
+            r#"{"mode":"raw","corpus_sha":"599e9c50dff219e0","bytes":1710,"tokens":464,"mean_nll":0.634,"nll_per_byte":0.172033,"perplexity":1.89}"#,
             "qwen3-27b",
         )
         .unwrap();
@@ -251,6 +285,40 @@ mod tests {
         assert!(qwen3.mean_nll < qwen25.mean_nll);
         let d = qwen3.improvement_over(&qwen25).expect("comparable");
         assert!(d > 0.0 && d < 40.0, "per-byte improvement should be modest, got {d}");
+    }
+
+    /// Two modes, two corpora. A score that does not say which mode produced it
+    /// could be compared against the other one, which is the same class of error
+    /// as a missing corpus hash.
+    #[test]
+    fn a_payload_without_a_mode_is_refused() {
+        let j = r#"{"corpus_sha":"x","bytes":1710,"tokens":422,"mean_nll":0.98,"nll_per_byte":0.2419}"#;
+        let err = parse(j, "m").unwrap_err();
+        assert!(err.to_string().contains("mode"), "{err}");
+    }
+
+    #[test]
+    fn the_mode_is_carried_on_the_score() {
+        let s = parse(LIVE, "m").expect("raw score");
+        assert_eq!(s.mode, "raw");
+
+        let instr = r#"{"mode":"instruction","corpus_sha":"cf1a3a850275b566","bytes":1207,"tokens":314,"mean_nll":0.851821,"nll_per_byte":0.221601,"perplexity":2.3439,"skipped_samples":0}"#;
+        let s = parse(instr, "m").expect("instruction score");
+        assert_eq!(s.mode, "instruction");
+        assert_eq!(s.corpus_bytes, 1207);
+    }
+
+    /// The two corpora must not be comparable, and the hash is what enforces it.
+    #[test]
+    fn a_raw_score_and_an_instruction_score_are_not_comparable() {
+        let raw = parse(LIVE, "m").expect("raw");
+        let instr = parse(
+            r#"{"mode":"instruction","corpus_sha":"cf1a3a850275b566","bytes":1207,"tokens":314,"mean_nll":0.851821,"nll_per_byte":0.221601,"perplexity":2.3439}"#,
+            "m",
+        )
+        .expect("instruction");
+        assert!(!raw.comparable_with(&instr));
+        assert_eq!(raw.improvement_over(&instr), None);
     }
 
     #[test]
@@ -351,8 +419,11 @@ mod tests {
 
     #[test]
     fn argv_passes_the_model_through() {
-        let a = argv("mlx-community/x");
+        let a = argv("mlx-community/x", MODE_INSTRUCTION);
         assert_eq!(a.program, "python3");
-        assert_eq!(a.args.last().map(String::as_str), Some("mlx-community/x"));
+        assert_eq!(
+            &a.args[a.args.len() - 2..],
+            &["mlx-community/x", "instruction"]
+        );
     }
 }

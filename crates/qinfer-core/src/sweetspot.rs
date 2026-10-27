@@ -267,7 +267,29 @@ pub fn frontier(set: &PlanSet, catalog: &Catalog) -> SweetSpot {
     // alternative — requiring every entry to be scored before any of it counts —
     // would keep the measured axis switched off indefinitely, because half the
     // catalogue is GGUF and not yet scoreable.
-    let scored_count = pairs.iter().filter(|(_, e)| quality_value(e).is_some()).count();
+    // Different metrics are different measurements. A `code_nll_per_byte` from
+    // raw continuation and a `code_instr_nll_per_byte` from a chat turn are not
+    // on the same scale, so a frontier that mixed them would be ordering numbers
+    // the way a spreadsheet orders text: alphabetically and wrongly.
+    //
+    // The metric with the most candidates wins and the rest are excluded. As
+    // coverage grows the majority metric changes on its own, which is the
+    // behaviour we want while the catalogue is being filled in.
+    let mut metric_counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for (_, e) in &pairs {
+        if let Some((_, m)) = quality_value(e) {
+            *metric_counts.entry(m).or_insert(0) += 1;
+        }
+    }
+    let majority_metric = metric_counts
+        .iter()
+        .max_by_key(|(m, n)| (**n, std::cmp::Reverse(*m)))
+        .map(|(m, _)| *m);
+
+    let scored_count = pairs
+        .iter()
+        .filter(|(_, e)| quality_value(e).map(|(_, m)| Some(m) == majority_metric).unwrap_or(false))
+        .count();
     let measured_axis = scored_count > 0;
     let axis = if measured_axis {
         CapabilitySource::Measured
@@ -275,7 +297,11 @@ pub fn frontier(set: &PlanSet, catalog: &Catalog) -> SweetSpot {
         CapabilitySource::Prior
     };
     let considered: Vec<(&Plan, &CatalogEntry)> = if measured_axis {
-        pairs.iter().copied().filter(|(_, e)| quality_value(e).is_some()).collect()
+        pairs
+            .iter()
+            .copied()
+            .filter(|(_, e)| quality_value(e).map(|(_, m)| Some(m) == majority_metric).unwrap_or(false))
+            .collect()
     } else {
         pairs.clone()
     };
@@ -334,11 +360,7 @@ pub fn frontier(set: &PlanSet, catalog: &Catalog) -> SweetSpot {
     let mut notes = Vec::new();
     match axis {
         CapabilitySource::Measured => {
-            let metric = considered
-                .iter()
-                .filter_map(|(_, e)| quality_value(e).map(|(_, m)| m))
-                .next()
-                .unwrap_or("unknown");
+            let metric = majority_metric.unwrap_or("unknown");
             let excluded = pairs.len().saturating_sub(scored_count);
             notes.push(format!(
                 "capability is a measured `{metric}` on a fixed corpus, where lower error is \
@@ -346,7 +368,7 @@ pub fn frontier(set: &PlanSet, catalog: &Catalog) -> SweetSpot {
             ));
             if excluded > 0 {
                 notes.push(format!(
-                    "{excluded} candidate(s) excluded from the frontier: no measured code score, \
+                    "{excluded} candidate(s) excluded from the frontier: no `{metric}` score, \
                      and ranking them on a parameter-count prior beside measured points would \
                      order neither"
                 ));
@@ -738,6 +760,50 @@ mod tests {
             objective: Objective::Balanced,
             ctx: 4096,
         }
+    }
+
+    /// Two metrics are two measurements. A frontier that mixed a raw-continuation
+    /// score with a chat-turn score would be ordering numbers that share no scale.
+    #[test]
+    fn a_mixed_metric_catalogue_uses_the_majority_metric_and_excludes_the_rest() {
+        let mut raw_hi = entry("raw-hi", 27_000_000_000, 27_000_000_000);
+        raw_hi.quality = Some(Quality {
+            metric: "code_nll_per_byte".into(),
+            value: Some(0.30),
+            method: "raw".into(),
+        });
+        let mut raw_lo = entry("raw-lo", 3_000_000_000, 3_000_000_000);
+        raw_lo.quality = Some(Quality {
+            metric: "code_nll_per_byte".into(),
+            value: Some(0.40),
+            method: "raw".into(),
+        });
+        let mut instr = entry("instr", 14_000_000_000, 14_000_000_000);
+        instr.quality = Some(Quality {
+            metric: "code_instr_nll_per_byte".into(),
+            value: Some(0.10),
+            method: "instr".into(),
+        });
+
+        let catalog = Catalog {
+            schema: "qinfer/catalog@1".into(),
+            version: "t".into(),
+            generated_at: String::new(),
+            note: String::new(),
+            entries: vec![raw_hi, raw_lo, instr],
+        };
+        let set = set_of(&[("raw-hi", 16.0), ("raw-lo", 131.0), ("instr", 31.0)]);
+        let s = frontier(&set, &catalog);
+
+        let ids: Vec<&str> = s.frontier.iter().map(|p| p.plan.entry_id.as_str()).collect();
+        assert!(
+            !ids.contains(&"instr"),
+            "a minority metric must not be ordered against the majority: {ids:?}"
+        );
+        assert!(ids.contains(&"raw-hi") && ids.contains(&"raw-lo"));
+        let note = s.notes.join(" ");
+        assert!(note.contains("code_nll_per_byte"), "{note}");
+        assert!(note.contains("1 candidate(s) excluded"), "{note}");
     }
 
     /// When every candidate has been scored, the axis stops being a guess. This

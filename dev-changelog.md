@@ -352,6 +352,50 @@ Honest caveats, which bound the conclusion:
 The prediction was wrong, and it was wrong in the direction that would have cost a
 user 16 GiB of download and a swap-thrashing model load.
 
+### v0.12 — instruction mode, and what it did and did not settle
+
+`raw` scores are off-distribution: every catalogue model is instruction-tuned and
+`raw` asks it to continue code. `bench` now has a second mode that applies the
+model's **own chat template** to eight coding requests and scores only the
+**assistant span**, which is what a coding assistant is actually asked to do.
+
+It is far more discriminative where it works:
+
+| model | raw | instruction |
+|---|---|---|
+| qwen2.5-3b-4bit-mlx | 0.2425 | **0.4474** |
+| qwen2.5-coder-14b-4bit-mlx | 0.1999 | **0.2216** |
+
+An 18% gap becomes a 2x gap, because the models are finally being measured on the
+task they were trained for.
+
+**The 30B-A3B is worst under both modes** (raw 0.2494, instruction 0.5567), so the
+v0.11 conclusion survives the change of measurement. That was the point of running
+it.
+
+**But instruction mode is not yet the catalogue's metric**, for two reasons found
+by running it:
+
+1. **The 27B refuses.** Its template is multimodal (image/video handling) and the
+   assistant span cannot be located, so the probe reports a refusal rather than
+   guessing at an offset. The prefix check that catches this is the only reason
+   the refusal is trustworthy.
+2. **The 30B's score is not comparable.** Its template is tool-aware and agentic;
+   with no tools and no system prompt it renders a bare conversation, which is not
+   the distribution the model was trained on. A perplexity of ~8.5 on terse
+   answers is implausible for a competent coder model, and the honest reading is
+   distribution mismatch, not incompetence. It is deliberately **not** recorded.
+
+The catalogue therefore stays on `raw`, where all four artifacts have a score.
+
+**A new rule fell out of this.** Two metrics are two measurements, so the frontier
+now groups candidates by metric, uses the largest group, and names the rest as
+excluded. `quality_value` returning a bare number was enough to let a raw score be
+ordered against a chat-turn score — numbers sharing no scale, sorted as reliably as
+sorting text.
+
+Tests: **258 pass.**
+
 Also fixed in passing: the micro-op spread estimator was `(max-min)/max`, which
 let one descheduled sample condemn a good measurement (67% spread on a stable
 3 ms op). Now interquartile about the median, with a discarded warm-up — GEMV

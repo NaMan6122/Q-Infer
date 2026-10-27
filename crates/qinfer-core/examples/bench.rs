@@ -10,13 +10,24 @@
 //! needs `llama-perplexity`, which is a second adapter and not yet written — so
 //! the GGUF half of the catalogue still has no measured quality.
 
-use qinfer_core::bench::{run, CodeScore};
+use qinfer_core::bench::{run, CodeScore, MODE_RAW};
 use qinfer_core::collect::SystemRunner;
 
 fn main() {
-    let models: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--mode instruction` scores the assistant span of a coding request
+    // instead of raw continuation. The two corpora hash differently, so the
+    // comparison block below will refuse to mix them.
+    let mut mode = MODE_RAW.to_string();
+    if let Some(i) = args.iter().position(|a| a == "--mode") {
+        if i + 1 < args.len() {
+            mode = args[i + 1].clone();
+            args.drain(i..i + 2);
+        }
+    }
+    let models: Vec<String> = args;
     if models.is_empty() {
-        eprintln!("usage: bench <model-path-or-hub-repo> [<model> ...]");
+        eprintln!("usage: bench [--mode raw|instruction] <model-path-or-hub-repo> [<model> ...]");
         std::process::exit(2);
     }
 
@@ -24,7 +35,7 @@ fn main() {
     let mut scores: Vec<CodeScore> = Vec::new();
 
     for m in &models {
-        match run(&runner, m) {
+        match run(&runner, m, &mode) {
             Ok(s) => {
                 println!("  {:<44} {}", m, s.describe());
                 scores.push(s);
