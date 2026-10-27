@@ -62,8 +62,14 @@ fn main() {
         }
     };
 
-    let method = format!("bench@{}tokens corpus {}", score.tokens, score.corpus_sha);
-    if !catalog.record_quality(entry_id, "code_nll", score.mean_nll, &method) {
+    // Record the per-byte figure, not the per-token one. The token count varies
+    // by tokeniser (422 for Qwen2.5 on this corpus, 464 for Qwen3), so a stored
+    // per-token score would make two entries look comparable when they are not.
+    let method = format!(
+        "bench@{}tokens/{}bytes corpus {}",
+        score.tokens, score.corpus_bytes, score.corpus_sha
+    );
+    if !catalog.record_quality(entry_id, "code_nll_per_byte", score.nll_per_byte, &method) {
         eprintln!("could not record the score for `{entry_id}`");
         std::process::exit(5);
     }
@@ -82,5 +88,5 @@ fn main() {
     }
 
     println!("  {}", score.describe());
-    println!("  recorded in {path} as `code_nll` ({method})");
+    println!("  recorded in {path} as `code_nll_per_byte` ({method})");
 }

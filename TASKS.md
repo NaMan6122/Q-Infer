@@ -30,6 +30,7 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | T-018 | Dashboard: Setup tab carries the ladder | MEDIUM | M0 | **DONE** — 8 snapshot tests, live on M5 Pro |
 | T-019 | Code-quality measurement: mean NLL on a fixed corpus | MEDIUM | M0 | **DONE** — 10 tests, 8.0% measured |
 | T-020 | Rank the frontier on measured quality | MEDIUM | M0 | **DONE** — 22 tests, catalogue round-trips |
+| T-021 | Normalise scores per byte; record measured quality | HIGH | M0 | **DONE** — 3 artifacts scored, frontier measured |
 
 **Review state.** T-001 cleared three Critic rounds (`BLOCK`, `BLOCK`, `PASS-WITH-CHANGES`). T-002/T-003/T-005 cleared independent verification: 23 tests written by a separate agent against the acceptance criteria, fixtures deliberately different from the implementers' (an M4 Max rather than the M5 Pro), **all criteria VERIFIED, no behavioural defect found**.
 

@@ -274,6 +274,48 @@ catalogue to its own format.
 
 Tests: **251 pass.**
 
+### v0.10 — per-byte normalisation and the first measured frontier (T-021)
+
+Running T-020 against real models found a defect in T-019 within minutes. The same
+1710-byte corpus tokenises to **422 tokens for Qwen2.5 and 464 for Qwen3**, so mean
+NLL per *token* averages over different numbers of tokens per model — and a coarser
+tokeniser makes each token carry more bytes, and therefore more surprise. Comparing
+those numbers measures the tokenisers as much as the models.
+
+Scores are now per **byte** of corpus, tokeniser-independent, and a payload whose
+per-byte figure disagrees with `mean_nll x tokens / bytes` by more than 2% is
+refused: one of the two is wrong and nothing can tell which.
+
+Three artifacts scored and recorded in the catalogue:
+
+| artifact | nats/byte | tokens |
+|---|---|---|
+| qwen3.8-27b-4bit-mlx | 0.1722 | 464 |
+| qwen2.5-coder-14b-4bit-mlx | 0.1999 | 422 |
+| qwen2.5-3b-4bit-mlx | 0.2425 | 422 |
+
+The frontier switched to the measured axis and changed its answer:
+
+```
+27B MLX          16 tok/s  cap 1.00  measured
+Coder 14B MLX    31 tok/s  cap 0.61  measured   <- recommended
+3B MLX          131 tok/s  cap 0.00  measured
+8 candidate(s) excluded: no measured code score
+```
+
+**Qwen2.5 Coder 14B** is the most capable plan above the 20 tok/s floor. The 27B
+scores better on code and decodes at 16 tok/s, which is below it — a trade the
+prior could only guess at and the measurement settles.
+
+**Q15 answered, negatively.** `llama-perplexity` cannot feed this axis yet: it
+averages ~half the corpus tokens with truncated context, moves 23% across legal
+`-c` values, and **exits 0 on failure**. A GGUF score must be keyed by
+`(corpus, runtime, config)` and never compared against an MLX one. An adapter is
+still worth building to answer quant sensitivity *within* the GGUF runtime; it is
+not a drop-in for the capability axis.
+
+Tests: **254 pass.**
+
 Also fixed in passing: the micro-op spread estimator was `(max-min)/max`, which
 let one descheduled sample condemn a good measurement (67% spread on a stable
 3 ms op). Now interquartile about the median, with a discarded warm-up — GEMV

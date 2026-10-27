@@ -189,7 +189,7 @@
           "arch_id": "apple-m5-pro",
           "backend": "metal",
           "status": "verified",
-          "evidence": "spikes/m0/REPORT.md \u00a710"
+          "evidence": "spikes/m0/REPORT.md §10"
         }
       ],
       "measurements": [
@@ -579,9 +579,9 @@
       ],
       "measurements": [],
       "quality": {
-        "metric": "perplexity_delta",
-        "value": null,
-        "method": "publisher-card"
+        "metric": "code_nll_per_byte",
+        "value": 0.172155,
+        "method": "bench@464tokens/1710bytes corpus 599e9c50dff219e0"
       }
     },
     {
@@ -616,7 +616,7 @@
           "arch_id": "apple-m5-pro",
           "backend": "mlx",
           "status": "verified",
-          "evidence": "spikes/m0/REPORT.md \u00a711"
+          "evidence": "spikes/m0/REPORT.md §11"
         }
       ],
       "measurements": [
@@ -628,9 +628,9 @@
         }
       ],
       "quality": {
-        "metric": "perplexity_delta",
-        "value": null,
-        "method": "publisher-card"
+        "metric": "code_nll_per_byte",
+        "value": 0.242491,
+        "method": "bench@422tokens/1710bytes corpus 599e9c50dff219e0"
       }
     },
     {
@@ -796,9 +796,9 @@
       ],
       "measurements": [],
       "quality": {
-        "metric": "perplexity_delta",
-        "value": null,
-        "method": "publisher-card"
+        "metric": "code_nll_per_byte",
+        "value": 0.199851,
+        "method": "bench@422tokens/1710bytes corpus 599e9c50dff219e0"
       }
     },
     {

@@ -38,7 +38,17 @@ pub struct CodeScore {
     pub corpus_sha: String,
     pub tokens: u32,
     /// Mean negative log-likelihood per token. **Lower is better.**
+    ///
+    /// Comparable only between runs whose `tokens` match: the same text
+    /// tokenises differently under different tokenisers, and a coarser one makes
+    /// each token carry more bytes and therefore more surprise. Use
+    /// [`CodeScore::nll_per_byte`] to compare across models.
     pub mean_nll: f64,
+    /// Negative log-likelihood per **byte of corpus**. Tokeniser-independent,
+    /// which makes it the only figure that can compare two different models.
+    pub nll_per_byte: f64,
+    /// Corpus length in bytes, so the normalisation is auditable.
+    pub corpus_bytes: u32,
     pub perplexity: f64,
     pub load_s: f64,
     pub forward_s: f64,
@@ -52,13 +62,16 @@ impl CodeScore {
 
     /// Relative capability improvement of `self` over `other`, at equal corpus.
     ///
-    /// `None` when the corpora differ, because subtracting two numbers measured
-    /// on different text is arithmetic without meaning.
+    /// Compares **per-byte** figures, not per-token: two models tokenise the same
+    /// text into different token counts, so subtracting per-token numbers across
+    /// models measures the tokenisers as much as the models. `None` when the
+    /// corpora differ, because subtracting numbers measured on different text is
+    /// arithmetic without meaning.
     pub fn improvement_over(&self, other: &CodeScore) -> Option<f64> {
-        if !self.comparable_with(other) || other.mean_nll <= 0.0 {
+        if !self.comparable_with(other) || other.nll_per_byte <= 0.0 {
             return None;
         }
-        Some((other.mean_nll - self.mean_nll) / other.mean_nll * 100.0)
+        Some((other.nll_per_byte - self.nll_per_byte) / other.nll_per_byte * 100.0)
     }
 
     /// The catalogue's `quality.value`, in the units the planner can consume.
@@ -67,8 +80,8 @@ impl CodeScore {
     /// pair travels together so neither can be quoted without the other.
     pub fn describe(&self) -> String {
         format!(
-            "{:.3} nats/token (perplexity {:.2}) over {} tokens, corpus {}",
-            self.mean_nll, self.perplexity, self.tokens, self.corpus_sha
+            "{:.4} nats/byte (perplexity {:.2} over {} tokens), corpus {}",
+            self.nll_per_byte, self.perplexity, self.tokens, self.corpus_sha
         )
     }
 }
@@ -161,11 +174,40 @@ pub fn parse(json: &str, model: &str) -> Result<CodeScore, BenchError> {
         });
     }
 
+    // The per-byte figure is the comparable one, so a payload without it cannot
+    // support the comparison it looks like it supports. Deriving it from
+    // `mean_nll x tokens` needs `bytes`, and guessing `bytes` would be inventing
+    // the denominator of the headline number.
+    let nll_per_byte = num("nll_per_byte").ok_or_else(|| BenchError::Unusable {
+        detail: "no nll_per_byte — a per-token score cannot be compared across tokenisers".into(),
+    })?;
+    if !nll_per_byte.is_finite() || nll_per_byte <= 0.0 {
+        return Err(BenchError::Unusable { detail: format!("nll_per_byte is {nll_per_byte}") });
+    }
+    let corpus_bytes = v.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+    if corpus_bytes == 0 {
+        return Err(BenchError::Unusable {
+            detail: "no corpus byte length, so the normalisation cannot be audited".into(),
+        });
+    }
+    // The two must agree with each other; if they do not, one of them is wrong
+    // and there is no way to tell which.
+    let derived = mean_nll * tokens as f64 / corpus_bytes as f64;
+    if (derived - nll_per_byte).abs() / nll_per_byte > 0.02 {
+        return Err(BenchError::Unusable {
+            detail: format!(
+                "nll_per_byte {nll_per_byte} disagrees with mean_nll x tokens / bytes ({derived})"
+            ),
+        });
+    }
+
     Ok(CodeScore {
         model: model.to_string(),
         corpus_sha,
         tokens,
         mean_nll,
+        nll_per_byte,
+        corpus_bytes,
         perplexity: num("perplexity").unwrap_or_else(|| mean_nll.exp()),
         load_s: num("load_s").unwrap_or(0.0),
         forward_s: num("forward_s").unwrap_or(0.0),
@@ -177,16 +219,52 @@ mod tests {
     use super::*;
 
     /// Captured verbatim from the reference machine (Qwen2.5-3B-Instruct-4bit).
-    const LIVE: &str = r#"{"corpus_sha":"599e9c50dff219e0","tokens":422,"mean_nll":0.982607,"perplexity":2.6714,"load_s":1.201,"forward_s":0.159,"dtype":"Device(gpu, 0)"}"#;
+    /// `nll_per_byte` = 0.982607 x 422 / 1710, the corpus being 1710 bytes.
+    const LIVE: &str = r#"{"corpus_sha":"599e9c50dff219e0","bytes":1710,"tokens":422,"mean_nll":0.982607,"nll_per_byte":0.242491,"perplexity":2.6714,"load_s":1.201,"forward_s":0.159,"dtype":"Device(gpu, 0)"}"#;
 
     #[test]
     fn a_live_payload_parses() {
         let s = parse(LIVE, "mlx-community/Qwen2.5-3B-Instruct-4bit").expect("score");
         assert_eq!(s.tokens, 422);
+        assert_eq!(s.corpus_bytes, 1710);
         assert!((s.mean_nll - 0.982607).abs() < 1e-9);
+        assert!((s.nll_per_byte - 0.242491).abs() < 1e-6);
         assert!((s.perplexity - 2.6714).abs() < 1e-4);
         assert_eq!(s.corpus_sha, "599e9c50dff219e0");
         assert!(s.describe().contains("corpus 599e9c50dff219e0"));
+    }
+
+    /// The same text scores as 422 or 464 tokens depending on the tokeniser, so a
+    /// per-token comparison across models measures the tokenisers as much as the
+    /// models. The per-byte figure is what makes them comparable.
+    #[test]
+    fn comparison_uses_the_per_byte_figure_not_the_per_token_one() {
+        let qwen25 = parse(LIVE, "qwen2.5-3b").unwrap(); // 422 tokens, 0.9826/token
+        let qwen3 = parse(
+            r#"{"corpus_sha":"599e9c50dff219e0","bytes":1710,"tokens":464,"mean_nll":0.634,"nll_per_byte":0.172033,"perplexity":1.89}"#,
+            "qwen3-27b",
+        )
+        .unwrap();
+
+        // Per token the second looks far better (0.634 vs 0.983); per byte the
+        // gap is smaller, because it simply split the text into more tokens.
+        assert!(qwen3.mean_nll < qwen25.mean_nll);
+        let d = qwen3.improvement_over(&qwen25).expect("comparable");
+        assert!(d > 0.0 && d < 40.0, "per-byte improvement should be modest, got {d}");
+    }
+
+    #[test]
+    fn a_payload_without_a_per_byte_figure_is_refused() {
+        let j = r#"{"corpus_sha":"x","tokens":422,"mean_nll":0.98,"perplexity":2.6}"#;
+        let err = parse(j, "m").unwrap_err();
+        assert!(err.to_string().contains("nll_per_byte"), "{err}");
+    }
+
+    #[test]
+    fn a_per_byte_figure_that_disagrees_with_the_token_one_is_refused() {
+        // 0.98 x 422 / 1710 = 0.2419; claiming 0.5 means one of the two is wrong.
+        let j = r#"{"corpus_sha":"x","bytes":1710,"tokens":422,"mean_nll":0.98,"nll_per_byte":0.5}"#;
+        assert!(parse(j, "m").unwrap_err().to_string().contains("disagrees"));
     }
 
     #[test]
@@ -263,8 +341,9 @@ mod tests {
     fn improvement_is_signed_and_oriented_correctly() {
         let good = parse(LIVE, "good").unwrap();
         let mut worse = parse(LIVE, "worse").unwrap();
-        worse.mean_nll = 1.2;
-        // `good` is better, so it must show a positive improvement over `worse`.
+        // Mutate the figure the comparison actually uses; changing `mean_nll`
+        // alone would silently stop the test from testing anything.
+        worse.nll_per_byte = 0.32;
         let d = good.improvement_over(&worse).expect("comparable");
         assert!(d > 0.0, "lower nll must read as improvement, got {d}");
         assert!(worse.improvement_over(&good).unwrap() < 0.0);

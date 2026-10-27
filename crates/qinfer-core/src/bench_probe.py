@@ -147,10 +147,23 @@ def main():
             }))
             return
 
+        # Per-token NLL is NOT comparable across models: the same text tokenises
+        # to a different number of tokens under a different tokeniser, and a
+        # coarser tokeniser makes each token carry more bytes and therefore more
+        # surprise. Measured on the reference machine: Qwen2.5 scored this corpus
+        # in 422 tokens and Qwen3 in 464. Normalising by the corpus's byte length
+        # removes the tokeniser from the comparison, which is the only way two
+        # models' scores mean the same thing.
+        corpus_bytes = len(CORPUS.encode("utf-8"))
+        total_nll = mean_nll * len(ids)
+        nll_per_byte = total_nll / corpus_bytes
+
         print(json.dumps({
             "corpus_sha": corpus_sha,
+            "bytes": corpus_bytes,
             "tokens": len(ids),
             "mean_nll": round(mean_nll, 6),
+            "nll_per_byte": round(nll_per_byte, 6),
             "perplexity": round(math.exp(mean_nll), 4),
             "load_s": round(load_s, 3),
             "forward_s": round(forward_s, 3),
