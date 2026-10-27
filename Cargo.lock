@@ -303,6 +303,7 @@ dependencies = [
  "crossterm",
  "qinfer-core",
  "ratatui",
+ "serde_json",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@
 mod cli;
 
 use std::io::{self, Stdout};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use crossterm::{
@@ -21,17 +22,19 @@ use crossterm::{
 use qinfer_core::catalog::Catalog;
 use qinfer_core::planner::{Constraints, PlanRequest, PlanSet, Planner};
 use qinfer_core::predict::{fit, Observation};
-use qinfer_core::{Fingerprint, Workspace};
+use qinfer_core::setup::{self, SetupEvent, Stage};
+use qinfer_core::sweetspot::{self, SweetSpot, DEFAULT_USABLE_TPS};
+use qinfer_core::{Fingerprint, Space, Workspace};
 
 /// The catalogue ships with the binary. A network fetch belongs in the
 /// provisioner (M1), not in the view.
-const CATALOG_JSON: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.26.json");
+const CATALOG_JSON: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.27.json");
 use ratatui::{
     backend::{CrosstermBackend, TestBackend},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs, Wrap},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
 
@@ -42,20 +45,35 @@ use ratatui::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Overview,
+    /// Where a new user starts: the measurement ladder, before any number on
+    /// any other tab means anything.
+    Setup,
     Bench,
+    /// The capability/speed curve, and the recommendation drawn from it.
+    /// This is the tab that answers "what should I run", which the ranked plan
+    /// list alone cannot: throughput ordering always favours the smallest model.
+    Frontier,
     Plans,
     Help,
 }
 
 impl Tab {
-    const ALL: [Tab; 4] = [Tab::Overview, Tab::Bench, Tab::Plans, Tab::Help];
+    const ALL: [Tab; 6] =
+        [Tab::Overview, Tab::Setup, Tab::Bench, Tab::Frontier, Tab::Plans, Tab::Help];
+
+    /// The tab bar, in display order. One list, so the arrow keys, the number
+    /// keys and the rendered bar cannot disagree about what exists.
+    const LABELS: [&'static str; 6] =
+        ["Overview", "Setup", "Bench", "Frontier", "Plans", "Help"];
 
     fn index(self) -> usize {
         match self {
             Tab::Overview => 0,
-            Tab::Bench => 1,
-            Tab::Plans => 2,
-            Tab::Help => 3,
+            Tab::Setup => 1,
+            Tab::Bench => 2,
+            Tab::Frontier => 3,
+            Tab::Plans => 4,
+            Tab::Help => 5,
         }
     }
 
@@ -78,8 +96,31 @@ struct App {
     /// there was nothing to offer.
     plans: Option<PlanSet>,
     plan_error: Option<String>,
+    /// The frontier computed once at load, alongside the plans. `None` means we
+    /// could not build one, and `plan_error` says why.
+    spot: Option<SweetSpot>,
+    /// The resolved memory budget, so the dashboard and the planner quote the
+    /// same number (T-012). `None` only when there is no fingerprint at all.
+    space: Option<Space>,
+    /// A ladder run in flight. The receiver is the entire interface to the
+    /// worker thread (ADR-0009: no socket, no daemon, no shared state).
+    run_rx: Option<Receiver<SetupEvent>>,
+    run_events: Vec<SetupEvent>,
+    /// The fingerprint the current (or last) ladder run collected. Preferred
+    /// over the one on disk, because the whole point of pressing Enter is that
+    /// the file is older than the machine (T-016).
+    live_fp: Option<Fingerprint>,
     status: String,
     refreshed: Instant,
+}
+
+/// What a rung of the ladder is doing right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rung {
+    Pending,
+    Running,
+    Done,
+    Failed,
 }
 
 impl App {
@@ -89,9 +130,9 @@ impl App {
         } else {
             ws.error.clone().unwrap_or_else(|| "no data".into())
         };
-        let (plans, plan_error) = compute_plans(&ws);
+        let a = analyse(ws.fingerprint.as_ref());
         let mut plan_table = TableState::default();
-        if plans.as_ref().map(|p| !p.plans.is_empty()).unwrap_or(false) {
+        if a.plans.as_ref().map(|p| !p.plans.is_empty()).unwrap_or(false) {
             plan_table.select(Some(0));
         }
         App {
@@ -99,8 +140,13 @@ impl App {
             tab: Tab::Overview,
             table: TableState::default(),
             plan_table,
-            plans,
-            plan_error,
+            plans: a.plans,
+            plan_error: a.error,
+            spot: a.spot,
+            space: a.space,
+            run_rx: None,
+            run_events: Vec::new(),
+            live_fp: None,
             status,
             refreshed: Instant::now(),
         }
@@ -113,10 +159,22 @@ impl App {
         } else {
             self.ws.error.clone().unwrap_or_else(|| "no data".into())
         };
-        let (plans, plan_error) = compute_plans(&self.ws);
-        self.plans = plans;
-        self.plan_error = plan_error;
+        self.reanalyse();
         self.refreshed = Instant::now();
+    }
+
+    /// Re-derive every tab from the freshest fingerprint available.
+    ///
+    /// A live fingerprint beats the one on disk: the reason to press Enter is
+    /// that the file predates the machine. `r` deliberately keeps that
+    /// preference rather than silently reverting to a staler source.
+    fn reanalyse(&mut self) {
+        let fp = self.live_fp.clone().or_else(|| self.ws.fingerprint.clone());
+        let a = analyse(fp.as_ref());
+        self.plans = a.plans;
+        self.plan_error = a.error;
+        self.spot = a.spot;
+        self.space = a.space;
     }
 
     fn plan_rows(&self) -> usize {
@@ -146,28 +204,125 @@ impl App {
     fn row_count(&self) -> usize {
         self.ws.results.as_ref().map(|r| r.rows.len()).unwrap_or(0)
     }
+
+    /// Start a measurement run. Refuses to start a second one: two ladders
+    /// competing for the memory bandwidth they are trying to measure would
+    /// corrupt both (PRD §5.5 noise discipline).
+    fn start_run(&mut self) {
+        if self.run_rx.is_some() {
+            self.status = "a measurement is already running".into();
+            return;
+        }
+        let catalog = match Catalog::from_json(CATALOG_JSON) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status = format!("catalogue parse failed: {e}");
+                return;
+            }
+        };
+        self.run_events.clear();
+        self.status = "measuring this machine …".into();
+        self.run_rx = Some(setup::spawn(catalog, DEFAULT_USABLE_TPS));
+    }
+
+    /// Drain whatever the worker has produced since the last frame. Non-blocking
+    /// so the UI never stalls behind a slow rung.
+    fn poll_run(&mut self) {
+        let mut batch: Vec<SetupEvent> = Vec::new();
+        let mut latest_fp: Option<Fingerprint> = None;
+        let mut finished = false;
+        if let Some(rx) = &self.run_rx {
+            while let Ok(ev) = rx.try_recv() {
+                match &ev {
+                    SetupEvent::Done => finished = true,
+                    SetupEvent::Fingerprint(fp) => latest_fp = Some((**fp).clone()),
+                    _ => {}
+                }
+                batch.push(ev);
+            }
+        }
+        if batch.is_empty() {
+            return;
+        }
+        if let Some(fp) = latest_fp {
+            self.live_fp = Some(fp);
+        }
+        self.run_events.extend(batch);
+        if finished {
+            self.run_rx = None;
+            self.status = format!("measured at {}", clock());
+            // Re-derive from the fingerprint the ladder just collected, so the
+            // other tabs stop quoting a budget captured months ago.
+            self.reanalyse();
+        }
+    }
+
+    fn rung(&self, stage: Stage) -> Rung {
+        let mut begun = false;
+        for e in &self.run_events {
+            match e {
+                SetupEvent::Begin(s) if *s == stage => begun = true,
+                SetupEvent::Stage(p) if p.stage == stage => return Rung::Done,
+                SetupEvent::Failed { stage: s, .. } if *s == stage => return Rung::Failed,
+                _ => {}
+            }
+        }
+        if begun {
+            Rung::Running
+        } else {
+            Rung::Pending
+        }
+    }
+
+    fn rung_detail(&self, stage: Stage) -> Option<&str> {
+        self.run_events.iter().find_map(|e| match e {
+            SetupEvent::Stage(p) if p.stage == stage => Some(p.detail.as_str()),
+            SetupEvent::Failed { stage: s, reason } if *s == stage => Some(reason.as_str()),
+            _ => None,
+        })
+    }
+
+    fn is_running(&self) -> bool {
+        self.run_rx.is_some()
+    }
+}
+
+/// Everything the dashboard derives in one pass, so the tabs cannot disagree
+/// with each other about what the machine can do.
+struct Analysis {
+    plans: Option<PlanSet>,
+    error: Option<String>,
+    spot: Option<SweetSpot>,
+    space: Option<Space>,
+}
+
+fn analysis_error(msg: impl Into<String>) -> Analysis {
+    Analysis { plans: None, error: Some(msg.into()), spot: None, space: None }
 }
 
 /// Calibrate from the catalogue's own measurements and rank plans for this
 /// machine. Deriving the calibration from the catalogue (rather than from the
 /// spike's JSON) means the dashboard and the planner cannot disagree about what
 /// the hardware did.
-fn compute_plans(ws: &Workspace) -> (Option<PlanSet>, Option<String>) {
-    let Some(fp) = ws.fingerprint.as_ref() else {
-        return (None, Some("no fingerprint to plan against".into()));
+fn analyse(source: Option<&Fingerprint>) -> Analysis {
+    let Some(fp) = source else {
+        return analysis_error("no fingerprint to plan against");
     };
 
     let catalog = match Catalog::from_json(CATALOG_JSON) {
         Ok(c) => c,
-        Err(e) => return (None, Some(format!("catalogue parse failed: {e}"))),
+        Err(e) => return analysis_error(format!("catalogue parse failed: {e}")),
     };
     if let Err(v) = catalog.validate() {
-        return (None, Some(format!("catalogue invalid: {}", v.first().map(|x| x.to_string()).unwrap_or_default())));
+        return analysis_error(format!(
+            "catalogue invalid: {}",
+            v.first().map(|x| x.to_string()).unwrap_or_default()
+        ));
     }
 
     let bw = fp.saturated_gbs();
     if !(bw > 0.0) || !bw.is_finite() {
-        return (None, Some("bandwidth unusable — probe it again".into()));
+        return analysis_error("bandwidth unusable — probe it again");
     }
 
     let observations: Vec<Observation> = catalog
@@ -184,10 +339,10 @@ fn compute_plans(ws: &Workspace) -> (Option<PlanSet>, Option<String>) {
         .collect();
 
     if observations.len() < 3 {
-        return (
-            None,
-            Some(format!("{} on-device measurements — 3 are needed to calibrate", observations.len())),
-        );
+        return analysis_error(format!(
+            "{} on-device measurements — 3 are needed to calibrate",
+            observations.len()
+        ));
     }
 
     let calibration = fit(&observations, bw);
@@ -200,13 +355,18 @@ fn compute_plans(ws: &Workspace) -> (Option<PlanSet>, Option<String>) {
         .clone()
         .unwrap_or_else(|| qinfer_core::collect::slugify(&fp.cpu.brand));
 
-    // `available_bytes` is the honest denominator for fit. Without it we fall
-    // back to half of RAM and the UI says so, rather than assuming the whole box.
-    let available = fp.memory.available_bytes.unwrap_or(fp.memory.total_bytes / 2);
+    // The budget comes from `space`, not from "half of RAM" (T-012). The view
+    // passes no device report — measuring belongs to the ladder, not the
+    // dashboard — so this degrades to `vm_stat` reclaimable or, failing that,
+    // a budget the UI labels as assumed.
+    let space = qinfer_core::space::resolve(fp, None);
+    let available = space.plan_budget();
 
     let planner = Planner::new(&catalog, &calibration, bw);
     let set = planner.plan(&PlanRequest::default(), &Constraints::new(arch, available));
-    (Some(set), None)
+    let spot = sweetspot::frontier(&set, &catalog);
+
+    Analysis { plans: Some(set), error: None, spot: Some(spot), space: Some(space) }
 }
 
 fn clock() -> String {
@@ -267,12 +427,13 @@ fn parse_dims(s: &str) -> Option<(u16, u16)> {
 
 fn snapshot(width: u16, height: u16, tab: &str) -> io::Result<()> {
     let mut app = App::new(Workspace::discover());
-    app.tab = match tab {
-        "bench" => Tab::Bench,
-        "plans" => Tab::Plans,
-        "help" => Tab::Help,
-        _ => Tab::Overview,
-    };
+    // Matched against `Tab::LABELS` case-insensitively, so a new tab cannot be
+    // added without this mapping noticing — the fallback is Overview only for a
+    // genuinely unknown name.
+    app.tab = Tab::ALL
+        .into_iter()
+        .find(|t| Tab::LABELS[t.index()].eq_ignore_ascii_case(tab))
+        .unwrap_or(Tab::Overview);
 
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
@@ -319,9 +480,16 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<(
                     KeyCode::Tab | KeyCode::Right => app.tab = app.tab.next(),
                     KeyCode::BackTab | KeyCode::Left => app.tab = app.tab.prev(),
                     KeyCode::Char('1') => app.tab = Tab::Overview,
-                    KeyCode::Char('2') => app.tab = Tab::Bench,
-                    KeyCode::Char('3') => app.tab = Tab::Plans,
+                    KeyCode::Char('2') => app.tab = Tab::Setup,
+                    KeyCode::Char('3') => app.tab = Tab::Bench,
+                    KeyCode::Char('4') => app.tab = Tab::Frontier,
+                    KeyCode::Char('5') => app.tab = Tab::Plans,
                     KeyCode::Char('?') => app.tab = Tab::Help,
+                    KeyCode::Enter => {
+                        if app.tab == Tab::Setup {
+                            app.start_run();
+                        }
+                    }
                     KeyCode::Char('r') => app.reload(),
                     KeyCode::Down | KeyCode::Char('j') => match app.tab {
                         Tab::Bench => app.move_row(1),
@@ -338,6 +506,10 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<(
             }
         }
 
+        // Drain the worker. This is the only mutable path in the dashboard and
+        // it goes through a channel, never a socket.
+        app.poll_run();
+
         // Cheap freshness indicator; no filesystem polling yet.
         let _ = Instant::now().duration_since(app.refreshed);
     }
@@ -351,9 +523,14 @@ fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4), // title row + tabs row
-            Constraint::Min(10),   // body
-            Constraint::Length(1), // status bar
+            // The header is fixed at 4 (border, title, tabs, border) and the
+            // status bar at 1, so the body must be allowed to shrink below 10
+            // or ratatui satisfies the minimum by starving the header — at
+            // 46x12 the machine name and the tab bar disappeared entirely,
+            // which is the one thing a degraded layout must never drop.
+            Constraint::Length(4),
+            Constraint::Min(3),
+            Constraint::Length(1),
         ])
         .split(f.area());
 
@@ -361,7 +538,9 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     match app.tab {
         Tab::Overview => render_overview(f, app, chunks[1]),
+        Tab::Setup => render_setup(f, app, chunks[1]),
         Tab::Bench => render_bench(f, app, chunks[1]),
+        Tab::Frontier => render_frontier(f, app, chunks[1]),
         Tab::Plans => render_plans(f, app, chunks[1]),
         Tab::Help => render_help(f, chunks[1]),
     }
@@ -387,17 +566,34 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         ("no data", Color::DarkGray)
     };
 
-    let title = Line::from(vec![
-        Span::styled(" Q-Infer ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw(" "),
-        Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("  ·  "),
-        Span::styled(tier, Style::default().fg(tier_colour)),
-    ]);
-
     let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
     f.render_widget(block, area);
+
+    // FR-59: fit the title to the panel instead of letting it run into the
+    // border. The raw Line was clipped mid-word at 46 columns, which reads as a
+    // rendering fault rather than as a narrow terminal. The certification tier
+    // is dropped before the machine name is, because "which box am I on" is the
+    // question this row exists to answer.
+    let chip = " Q-Infer ";
+    let tier_part = format!("  ·  {tier}");
+    let avail = inner.width as usize;
+    let remaining = avail.saturating_sub(chip.len() + 1);
+    let mut spans = vec![
+        Span::styled(chip, Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+    ];
+    if remaining >= tier_part.chars().count() + 6 {
+        let nb = remaining - tier_part.chars().count();
+        spans.push(Span::styled(truncate(&name, nb), Style::default().add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(tier_part, Style::default().fg(tier_colour)));
+    } else {
+        spans.push(Span::styled(
+            truncate(&name, remaining.max(1)),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+    }
+    let title = Line::from(spans);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -406,16 +602,63 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(Paragraph::new(title), rows[0]);
 
-    let tabs = Tabs::new(vec!["Overview", "Bench", "Plans", "Help"])
-        .select(app.tab.index())
-        .divider(Span::raw(" │ "))
-        .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-    f.render_widget(tabs, rows[1]);
+    f.render_widget(Paragraph::new(tab_bar(app, inner.width)), rows[1]);
+}
+
+/// The tab bar, built as a plain `Line` rather than through the `Tabs` widget.
+///
+/// `Tabs` pads every label invisibly, so a width computed from the label lengths
+/// clipped the final tab no matter how the threshold was tuned. Owning the
+/// layout means the fit is exact and the arithmetic is the same one the test
+/// asserts against.
+///
+/// Shedding order: full names, then abbreviations, then the digits that match
+/// the number keys — the bar loses labels before it loses the ability to
+/// navigate.
+fn tab_bar(app: &App, width: u16) -> Line<'static> {
+    let full: Vec<&'static str> = Tab::LABELS.to_vec();
+    let short: Vec<&'static str> = vec!["Over", "Setup", "Bench", "Front", "Plans", "Help"];
+    let nums: Vec<&'static str> = vec!["1", "2", "3", "4", "5", "?"];
+
+    let candidates: [(Vec<&'static str>, &'static str); 6] = [
+        (full.clone(), " | "),
+        (full, " "),
+        (short.clone(), " | "),
+        (short, " "),
+        (nums.clone(), " | "),
+        (nums, ""),
+    ];
+
+    let fit = |labels: &[&'static str], div: &str| -> usize {
+        labels.iter().map(|l| l.chars().count()).sum::<usize>()
+            + div.chars().count() * labels.len().saturating_sub(1)
+    };
+
+    let (labels, divider) = candidates
+        .into_iter()
+        .find(|(l, d)| fit(l, d) <= width as usize)
+        .unwrap_or((vec!["1", "2", "3", "4", "5", "?"], ""));
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, label) in labels.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(divider, Style::default().fg(Color::DarkGray)));
+        }
+        let style = if i == app.tab.index() {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        spans.push(Span::styled(*label, style));
+    }
+    Line::from(spans)
 }
 
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.tab {
-        Tab::Bench => "  ↑↓  ·  r  ·  q",
+        Tab::Setup if app.is_running() => "  measuring…  ·  q",
+        Tab::Setup => "  enter  run  ·  tab  ·  ?  ·  q",
+        Tab::Bench | Tab::Plans => "  ↑↓  ·  r  ·  tab  ·  q",
         _ => "  tab  ·  ?  ·  q",
     };
     let line = Line::from(vec![
@@ -424,6 +667,180 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
+
+// --- Setup -----------------------------------------------------------------
+
+/// The ladder: what the tool is about to measure, and what it found.
+///
+/// This tab is the entry point. Every other tab shows a number that is only
+/// meaningful once a run has happened here, so an empty dashboard should lead
+/// someone to press Enter rather than to read a stale figure from disk.
+fn render_setup(f: &mut Frame, app: &App, area: Rect) {
+    let block = panel(" Setup — measure this machine, then choose ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    const PREFIX: usize = 16;
+    let avail = (inner.width as usize).saturating_sub(PREFIX).max(6);
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (i, stage) in Stage::ALL.iter().enumerate() {
+        let state = app.rung(*stage);
+        let (marker, style) = match state {
+            Rung::Pending => (" ", Style::default().fg(Color::DarkGray)),
+            Rung::Running => (">", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Rung::Done => ("+", Style::default().fg(Color::Green)),
+            Rung::Failed => ("x", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        };
+        let detail = app.rung_detail(*stage).unwrap_or(match state {
+            Rung::Pending => "not yet measured",
+            Rung::Running => "working...",
+            _ => "",
+        });
+        let detail_style = match state {
+            Rung::Pending => Style::default().fg(Color::DarkGray),
+            Rung::Failed => Style::default().fg(Color::Red),
+            _ => Style::default(),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {marker} {}. {:<9} ", i + 1, stage.label()), style),
+            Span::styled(truncate(detail, avail), detail_style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    if app.run_events.is_empty() {
+        // The honest empty state: nothing here is a measurement yet, and saying
+        // so is more useful than showing last month's numbers with confidence.
+        lines.push(Line::from(Span::styled(
+            " Nothing has been measured on this machine in this session.",
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(Span::styled(
+            " Press Enter to run the ladder. It takes a few seconds, needs no",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            " privileges, and installs nothing.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if app.is_running() {
+        lines.push(Line::from(Span::styled(
+            " Measuring. The machine must stay quiet or the figures will be noise.",
+            Style::default().fg(Color::Cyan),
+        )));
+    } else if let Some(spot) = app.spot.as_ref() {
+        lines.push(Line::from(Span::styled(
+            format!(" {}", spot.usable_reason(DEFAULT_USABLE_TPS)),
+            Style::default().fg(Color::Green),
+        )));
+        for n in spot.notes.iter().take(1) {
+            lines.push(Line::from(Span::styled(format!(" {n}"), Style::default().fg(Color::Yellow))));
+        }
+    } else if let Some(err) = app.plan_error.as_ref() {
+        lines.push(Line::from(Span::styled(format!(" {err}"), Style::default().fg(Color::Red))));
+    }
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+// --- Frontier --------------------------------------------------------------
+
+/// The curve, and the recommendation drawn from it.
+///
+/// This tab exists because the ranked list cannot answer "what should I run":
+/// ordering by throughput always crowns the smallest artifact. Here the user
+/// sees the trade, the floor that was applied, and — critically — that the
+/// capability axis is a **prior** until it has been measured (T-014, T-015).
+fn render_frontier(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Frontier — capability against speed ")
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(spot) = app.spot.as_ref() else {
+        let msg = app.plan_error.clone().unwrap_or_else(|| "no frontier to show".into());
+        f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }), inner);
+        return;
+    };
+
+    if spot.is_empty() {
+        f.render_widget(
+            Paragraph::new(spot.usable_reason(DEFAULT_USABLE_TPS)).wrap(Wrap { trim: true }),
+            inner,
+        );
+        return;
+    }
+
+    let floor = DEFAULT_USABLE_TPS;
+    let best = spot.best_usable(floor);
+    let mut lines: Vec<Line> = Vec::new();
+    // FR-59: corroborating columns are shed in a defined order rather than
+    // wrapping into a second line that reads like a separate row. The order is
+    // source, then capability, then the display name — the value the user came
+    // for (tok/s and GiB) is the last thing to go.
+    const FULL: u16 = 84;
+    const MEDIUM: u16 = 64;
+    let (show_source, show_cap) = (inner.width >= FULL, inner.width >= MEDIUM);
+    // Width consumed by everything except the name:
+    //   " <marker> " 4 + "   53 tok/s" 12 + "    4.8 GiB" 11 + "  cap 1.00" 10 + "  prior (params)" 16
+    let overhead: u16 = if show_source { 53 } else if show_cap { 37 } else { 27 };
+    let name_budget = inner.width.saturating_sub(overhead).max(8) as usize;
+
+    for (i, p) in spot.frontier.iter().enumerate() {
+        let chosen = best.map(|b| b.plan.id == p.plan.id).unwrap_or(false);
+        let is_knee = Some(i) == spot.knee;
+        // ASCII only: a glyph is not a reliable thing to send down a pipe.
+        let marker = if chosen {
+            "->"
+        } else if is_knee {
+            " ."
+        } else {
+            "  "
+        };
+        let base = if chosen {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let dim = Style::default().fg(Color::DarkGray);
+        let name = truncate(&p.plan.display, name_budget.max(8));
+        let mut spans = vec![
+            Span::styled(format!(" {marker} "), base),
+            Span::styled(format!("{name:<width$}", width = name_budget.max(8)), base),
+            Span::styled(format!("{:>6.0} tok/s", p.tps()), base),
+            Span::styled(
+                format!("  {:>5.1} GiB", p.plan.peak_bytes as f64 / (1u64 << 30) as f64),
+                dim,
+            ),
+        ];
+        if show_cap {
+            spans.push(Span::styled(format!("  cap {:.2}", p.capability), dim));
+        }
+        if show_source {
+            spans.push(Span::styled(format!("  {}", p.source.label()), dim));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(" {:.0}+ tok/s: {}", floor, spot.usable_reason(floor)),
+        Style::default().fg(Color::Cyan),
+    )));
+    for n in &spot.notes {
+        lines.push(Line::from(Span::styled(format!(" {n}"), Style::default().fg(Color::Yellow))));
+    }
+
+    // `trim: false` matters: with `trim: true` ratatui strips the leading spaces
+    // that carry the row markers, and every row silently loses its status.
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+
 
 // --- Overview --------------------------------------------------------------
 
@@ -657,6 +1074,34 @@ fn render_headline(f: &mut Frame, app: &App, fp: &Fingerprint, area: Rect) {
         lines.push(Line::from(Span::styled(
             "   and any plan generated now should be treated as provisional.",
             Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    // The answer, before the evidence for it. Everything above this line is a
+    // caveat that invalidates it; everything below is how we know.
+    if let Some(best) = app.spot.as_ref().and_then(|s| s.best_usable(DEFAULT_USABLE_TPS)) {
+        lines.push(Line::from(vec![
+            Span::styled(" Use        ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                truncate(&best.plan.display, (inner.width as usize).saturating_sub(28).max(8)),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("  {:.0} tok/s", best.tps()), Style::default().fg(Color::Green)),
+            Span::styled(
+                format!("  {:.1} GiB", best.plan.peak_bytes as f64 / (1u64 << 30) as f64),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            truncate(
+                &format!(
+                    "            the most capable plan above {:.0} tok/s; tab 4 shows the trade",
+                    DEFAULT_USABLE_TPS
+                ),
+                inner.width as usize,
+            ),
+            Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(""));
     }
@@ -936,22 +1381,32 @@ fn render_plans(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, chunks[1]);
 
     if let Some(p) = set.plans.get(sel) {
+        // `saturating_sub`, not `-`: below ten columns this was a usize
+        // underflow, which panics in debug and silently wraps to a huge width
+        // in release. A terminal can legitimately be that narrow — a tmux pane
+        // split four ways is narrower than anyone expects.
+        let room = (inner.width as usize).saturating_sub(8).max(1);
         let mut lines: Vec<Line> = p
             .rationale
             .iter()
             .take(3)
-            .map(|r| Line::from(vec![Span::styled(" why   ", Style::default().fg(Color::DarkGray)), Span::raw(truncate(r, inner.width as usize - 8))]))
+            .map(|r| {
+                Line::from(vec![
+                    Span::styled(" why   ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(truncate(r, room)),
+                ])
+            })
             .collect();
         for r in p.risks.iter().take(2) {
             lines.push(Line::from(vec![
                 Span::styled(" risk  ", Style::default().fg(Color::Yellow)),
-                Span::raw(truncate(r, inner.width as usize - 8)),
+                Span::raw(truncate(r, room)),
             ]));
         }
         if !p.fallbacks.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
-                Span::raw(truncate(&p.fallbacks.join(", "), inner.width as usize - 8)),
+                Span::raw(truncate(&p.fallbacks.join(", "), room)),
             ]));
         }
         f.render_widget(Paragraph::new(lines), inner);
@@ -967,10 +1422,23 @@ fn render_help(f: &mut Frame, area: Rect) {
 
     let lines = vec![
         Line::from(vec![Span::styled("  tab / ←→   ", Style::default().fg(Color::Cyan)), Span::raw("switch view")]),
-        Line::from(vec![Span::styled("  1 2 3 ?    ", Style::default().fg(Color::Cyan)), Span::raw("jump to Overview / Bench / Plans / Help")]),
+        Line::from(vec![Span::styled("  1 2 3 4 ?  ", Style::default().fg(Color::Cyan)), Span::raw("jump to Overview / Bench / Frontier / Plans / Help")]),
         Line::from(vec![Span::styled("  ↑ ↓ j k    ", Style::default().fg(Color::Cyan)), Span::raw("move selection in a table")]),
         Line::from(vec![Span::styled("  r          ", Style::default().fg(Color::Cyan)), Span::raw("reload fingerprint and results from disk")]),
         Line::from(vec![Span::styled("  q / esc    ", Style::default().fg(Color::Cyan)), Span::raw("quit — never bound to anything destructive")]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Frontier ranks by capability, not throughput. Past ~20 tok/s extra",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  speed buys nothing, so the tab recommends the most capable plan that",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  is still fast enough, and says what it traded away.",
+            Style::default().fg(Color::DarkGray),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "  This dashboard reads the same files the CLI writes. It is a view,",
