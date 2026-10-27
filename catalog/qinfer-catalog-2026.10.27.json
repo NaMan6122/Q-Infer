@@ -712,9 +712,9 @@
       ],
       "measurements": [],
       "quality": {
-        "metric": "perplexity_delta",
-        "value": null,
-        "method": "publisher-card"
+        "metric": "code_nll_per_byte",
+        "value": 0.249388,
+        "method": "bench@422tokens/1710bytes corpus 599e9c50dff219e0"
       }
     },
     {

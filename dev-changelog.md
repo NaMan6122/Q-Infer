@@ -316,6 +316,42 @@ not a drop-in for the capability axis.
 
 Tests: **254 pass.**
 
+### v0.11 — the 30B-A3B is not the sweet spot (measured)
+
+The prediction this whole thread has been carrying: Qwen3 Coder 30B-A3B, ~3.3B
+active parameters, "30B capability at 123 tok/s". Scored on the same corpus, in
+the same runtime, it is the **worst of the four**:
+
+| artifact | nats/byte | decode |
+|---|---|---|
+| qwen3.8-27b-4bit-mlx | **0.1722** | 16 tok/s |
+| qwen2.5-coder-14b-4bit-mlx | 0.1999 | 31 tok/s |
+| qwen2.5-3b-4bit-mlx | 0.2425 | 131 tok/s |
+| qwen3-coder-30b-a3b-4bit-mlx | 0.2494 | 123 tok/s |
+
+It is **dominated** — slower than the 14B and worse at code — so the frontier drops
+it entirely rather than offering it as a trade-off.
+
+The likely mechanism is the one the MoE prior always missed: a single forward pass
+routes through ~3.3B active parameters, and next-token prediction quality tracks
+active compute far more closely than it tracks the weight file's size. "30B of
+knowledge, 3B of work per token" is a capacity claim; this measurement is a
+per-token claim, and they are not the same thing.
+
+Honest caveats, which bound the conclusion:
+
+- The corpus is **raw code continuation**, not a chat-formatted instruction turn.
+  All four models are instruction-tuned, so this is off-distribution for all of
+  them — but equally so, and the 14B Coder still beat the 30B Coder under the same
+  conditions, which is the comparison that matters.
+- One corpus, 1710 bytes, 422-464 tokens. It resolves differences of this size
+  (4 of 4 orderings are unambiguous) and cannot resolve small ones.
+- It measures next-token prediction on code. Not instruction-following, not
+  agentic editing, not tool use.
+
+The prediction was wrong, and it was wrong in the direction that would have cost a
+user 16 GiB of download and a swap-thrashing model load.
+
 Also fixed in passing: the micro-op spread estimator was `(max-min)/max`, which
 let one descheduled sample condemn a good measurement (67% spread on a stable
 3 ms op). Now interquartile about the median, with a discarded warm-up — GEMV
