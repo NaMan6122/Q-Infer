@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 
+pub mod bench;
 pub mod catalog;
 pub mod cfp;
 pub mod collect;
@@ -23,6 +24,7 @@ pub mod space;
 pub mod spec;
 pub mod sweetspot;
 
+pub use bench::{BenchError, CodeScore};
 pub use catalog::{Artifact, ByteSource, Catalog, CatalogEntry, CatalogViolation, Coverage, ModelMeta};
 pub use cfp::{parse_major, Violation, MAX_SPREAD_PCT, SUPPORTED_MAJOR};
 pub use engines::{adapter_for_format, detect, Adapter, BenchRequest, BenchResult, Engine};
