@@ -28,6 +28,7 @@ Atomic units. A task is `DONE` only when its acceptance criteria are covered by 
 | T-016 | Setup ladder: staged run with injected measurements | MEDIUM | M0 | **DONE** — 8 tests |
 | T-017 | Dashboard: Frontier tab and a measured memory budget | MEDIUM | M0 | **DONE** — renders at 46–100 cols |
 | T-018 | Dashboard: Setup tab carries the ladder | MEDIUM | M0 | **DONE** — 8 snapshot tests, live on M5 Pro |
+| T-019 | Code-quality measurement: mean NLL on a fixed corpus | MEDIUM | M0 | **DONE** — 10 tests, 8.0% measured |
 
 **Review state.** T-001 cleared three Critic rounds (`BLOCK`, `BLOCK`, `PASS-WITH-CHANGES`). T-002/T-003/T-005 cleared independent verification: 23 tests written by a separate agent against the acceptance criteria, fixtures deliberately different from the implementers' (an M4 Max rather than the M5 Pro), **all criteria VERIFIED, no behavioural defect found**.
 
@@ -304,3 +305,27 @@ The last piece that made T-016 merely a library. Pressing Enter is the entire "f
 
 **Test Evidence:** `crates/qinfer-tui/tests/snapshot.rs` — 8 tests including `the_header_survives_a_short_terminal`; `crates/qinfer-core/src/setup.rs` — 8 tests; live end-to-end via `cargo run -p qinfer-core --example ladder`, which resolves 17.8 GiB and chooses Qwen3 Coder 30B-A3B at 123 tok/s on the reference machine.
 **Rollback:** revert the commit; the tab is additive and Enter is the only binding added.
+
+---
+
+## T-019 — Code-quality measurement
+
+`planner::quality_placeholder` has stood in for a measurement since the seed catalogue: Q4 -> 0.93, Q8 -> 0.99, chosen to look monotonic. They were not wrong and they were not evidence, and no surface could say which. The same function is why `Balanced` cannot distinguish a 0.5B from a 27B.
+
+**Acceptance criteria**
+- *Given* a model and the fixed corpus, *when* it is scored, *then* the result carries the corpus hash it was measured against and the token count.
+- *Given* two scores from different corpora, *when* they are compared, *then* the comparison returns nothing rather than subtracting two numbers measured on different text.
+- *Given* a mean NLL of zero or below, *when* parsed, *then* it is refused — that is a broken probe, not a perfect model.
+- *Given* a payload with fewer than 32 tokens scored, *when* parsed, *then* it is refused as too little signal to mean anything.
+- *Given* any failure, *when* it is reported, *then* it carries a fix specific to its class; a probe that never ran **must not** prescribe "check the model", and a model that failed to load must not prescribe "install MLX".
+- *Given* the same model at two precisions, *when* both are scored, *then* the difference is reported as a signed percentage and the direction is not inverted.
+
+**Test Evidence:** `crates/qinfer-core/src/bench.rs` — 10 tests. Live on the reference machine, same corpus (`599e9c50dff219e0`), 422 tokens:
+
+| artifact | nats/token | perplexity |
+|---|---|---|
+| Qwen2.5-3B-Instruct-4bit | 0.983 | 2.67 |
+| Qwen2.5-3B-Instruct-8bit | 0.904 | 2.47 |
+
+8-bit is **8.0% better on code** than 4-bit — close to the ~6.5% gap `quality_placeholder` was estimating, and now measured rather than asserted.
+**Rollback:** additive module; `quality_placeholder` is untouched and the planner behaves as before until a surface feeds it a score.

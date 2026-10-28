@@ -219,6 +219,42 @@ a fixed size that starved something else:
 
 Tests: **232 pass.**
 
+### v0.8 — measuring code quality (T-019)
+
+`quality_placeholder` has stood in for a measurement since the seed catalogue: Q4
+-> 0.93, Q8 -> 0.99. Not wrong, but not evidence, and no surface could say which.
+
+`bench` scores a model's mean negative log-likelihood per token on a checked-in
+code corpus. Two things fall out of one number, and the second is the one that
+matters:
+
+**Quantisation damage.** Same model, same text, two precisions:
+
+```
+Qwen2.5-3B-Instruct-4bit   0.983 nats/token   (perplexity 2.67)
+Qwen2.5-3B-Instruct-8bit   0.904 nats/token   (perplexity 2.47)
+8-bit is 8.0% better on code than 4-bit
+```
+
+That is the comparison the placeholder was estimating at ~6.5%, measured in two
+seconds. The alternative — pass@1 on HumanEval — would need ~1,090 problems per
+arm to resolve a 5-point difference at 80% power, and ships 164. A leaderboard
+that size cannot answer this question; a laptop can.
+
+**Capability.** `sweetspot` ranks on `log10(total_params)` because it has nothing
+better, and prints a note saying so. Mean NLL on code measures the thing that
+axis stands in for, comparably across models because the corpus is fixed.
+
+The honesty rule is in the type: every score carries the corpus hash it was
+measured against, and `improvement_over` returns `None` for two scores from
+different text rather than subtracting numbers measured on different things.
+
+Known gap, stated in the module: `mlx` artifacts only. Scoring a GGUF needs
+`llama-perplexity`, a second adapter not yet written, so half the catalogue still
+has no measured quality.
+
+Tests: **242 pass.**
+
 Also fixed in passing: the micro-op spread estimator was `(max-min)/max`, which
 let one descheduled sample condemn a good measurement (67% spread on a stable
 3 ms op). Now interquartile about the median, with a discarded warm-up — GEMV
