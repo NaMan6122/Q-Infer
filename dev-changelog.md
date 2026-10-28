@@ -255,6 +255,147 @@ has no measured quality.
 
 Tests: **242 pass.**
 
+### v0.9 — the capability axis becomes a measurement (T-020)
+
+`sweetspot` has ranked on `log10(total_params)` since v0.5, with a note admitting
+it. It now reads `catalogue.quality`, orients error metrics so lower is always
+better, and switches the whole frontier to measured points as soon as any exist.
+
+The first policy was wrong and worth recording: it required **every** candidate to
+be scored before the measured axis switched on, which would have left the axis off
+indefinitely — half the catalogue is GGUF and `bench` drives `mlx_lm`. The
+shipped policy builds the frontier only from measured candidates and names the
+rest as excluded, so it gets smaller and honest instead of larger and wrong.
+
+The catalogue is now writable: scores live in the document rather than a sidecar,
+so they are reviewed, diffed and pinned with the artifact they describe. Unknown
+ids and non-finite values are refused, and a round-trip test holds the shipped
+catalogue to its own format.
+
+Tests: **251 pass.**
+
+### v0.10 — per-byte normalisation and the first measured frontier (T-021)
+
+Running T-020 against real models found a defect in T-019 within minutes. The same
+1710-byte corpus tokenises to **422 tokens for Qwen2.5 and 464 for Qwen3**, so mean
+NLL per *token* averages over different numbers of tokens per model — and a coarser
+tokeniser makes each token carry more bytes, and therefore more surprise. Comparing
+those numbers measures the tokenisers as much as the models.
+
+Scores are now per **byte** of corpus, tokeniser-independent, and a payload whose
+per-byte figure disagrees with `mean_nll x tokens / bytes` by more than 2% is
+refused: one of the two is wrong and nothing can tell which.
+
+Three artifacts scored and recorded in the catalogue:
+
+| artifact | nats/byte | tokens |
+|---|---|---|
+| qwen3.8-27b-4bit-mlx | 0.1722 | 464 |
+| qwen2.5-coder-14b-4bit-mlx | 0.1999 | 422 |
+| qwen2.5-3b-4bit-mlx | 0.2425 | 422 |
+
+The frontier switched to the measured axis and changed its answer:
+
+```
+27B MLX          16 tok/s  cap 1.00  measured
+Coder 14B MLX    31 tok/s  cap 0.61  measured   <- recommended
+3B MLX          131 tok/s  cap 0.00  measured
+8 candidate(s) excluded: no measured code score
+```
+
+**Qwen2.5 Coder 14B** is the most capable plan above the 20 tok/s floor. The 27B
+scores better on code and decodes at 16 tok/s, which is below it — a trade the
+prior could only guess at and the measurement settles.
+
+**Q15 answered, negatively.** `llama-perplexity` cannot feed this axis yet: it
+averages ~half the corpus tokens with truncated context, moves 23% across legal
+`-c` values, and **exits 0 on failure**. A GGUF score must be keyed by
+`(corpus, runtime, config)` and never compared against an MLX one. An adapter is
+still worth building to answer quant sensitivity *within* the GGUF runtime; it is
+not a drop-in for the capability axis.
+
+Tests: **254 pass.**
+
+### v0.11 — the 30B-A3B is not the sweet spot (measured)
+
+The prediction this whole thread has been carrying: Qwen3 Coder 30B-A3B, ~3.3B
+active parameters, "30B capability at 123 tok/s". Scored on the same corpus, in
+the same runtime, it is the **worst of the four**:
+
+| artifact | nats/byte | decode |
+|---|---|---|
+| qwen3.8-27b-4bit-mlx | **0.1722** | 16 tok/s |
+| qwen2.5-coder-14b-4bit-mlx | 0.1999 | 31 tok/s |
+| qwen2.5-3b-4bit-mlx | 0.2425 | 131 tok/s |
+| qwen3-coder-30b-a3b-4bit-mlx | 0.2494 | 123 tok/s |
+
+It is **dominated** — slower than the 14B and worse at code — so the frontier drops
+it entirely rather than offering it as a trade-off.
+
+The likely mechanism is the one the MoE prior always missed: a single forward pass
+routes through ~3.3B active parameters, and next-token prediction quality tracks
+active compute far more closely than it tracks the weight file's size. "30B of
+knowledge, 3B of work per token" is a capacity claim; this measurement is a
+per-token claim, and they are not the same thing.
+
+Honest caveats, which bound the conclusion:
+
+- The corpus is **raw code continuation**, not a chat-formatted instruction turn.
+  All four models are instruction-tuned, so this is off-distribution for all of
+  them — but equally so, and the 14B Coder still beat the 30B Coder under the same
+  conditions, which is the comparison that matters.
+- One corpus, 1710 bytes, 422-464 tokens. It resolves differences of this size
+  (4 of 4 orderings are unambiguous) and cannot resolve small ones.
+- It measures next-token prediction on code. Not instruction-following, not
+  agentic editing, not tool use.
+
+The prediction was wrong, and it was wrong in the direction that would have cost a
+user 16 GiB of download and a swap-thrashing model load.
+
+### v0.12 — instruction mode, and what it did and did not settle
+
+`raw` scores are off-distribution: every catalogue model is instruction-tuned and
+`raw` asks it to continue code. `bench` now has a second mode that applies the
+model's **own chat template** to eight coding requests and scores only the
+**assistant span**, which is what a coding assistant is actually asked to do.
+
+It is far more discriminative where it works:
+
+| model | raw | instruction |
+|---|---|---|
+| qwen2.5-3b-4bit-mlx | 0.2425 | **0.4474** |
+| qwen2.5-coder-14b-4bit-mlx | 0.1999 | **0.2216** |
+
+An 18% gap becomes a 2x gap, because the models are finally being measured on the
+task they were trained for.
+
+**The 30B-A3B is worst under both modes** (raw 0.2494, instruction 0.5567), so the
+v0.11 conclusion survives the change of measurement. That was the point of running
+it.
+
+**But instruction mode is not yet the catalogue's metric**, for two reasons found
+by running it:
+
+1. **The 27B refuses.** Its template is multimodal (image/video handling) and the
+   assistant span cannot be located, so the probe reports a refusal rather than
+   guessing at an offset. The prefix check that catches this is the only reason
+   the refusal is trustworthy.
+2. **The 30B's score is not comparable.** Its template is tool-aware and agentic;
+   with no tools and no system prompt it renders a bare conversation, which is not
+   the distribution the model was trained on. A perplexity of ~8.5 on terse
+   answers is implausible for a competent coder model, and the honest reading is
+   distribution mismatch, not incompetence. It is deliberately **not** recorded.
+
+The catalogue therefore stays on `raw`, where all four artifacts have a score.
+
+**A new rule fell out of this.** Two metrics are two measurements, so the frontier
+now groups candidates by metric, uses the largest group, and names the rest as
+excluded. `quality_value` returning a bare number was enough to let a raw score be
+ordered against a chat-turn score — numbers sharing no scale, sorted as reliably as
+sorting text.
+
+Tests: **258 pass.**
+
 Also fixed in passing: the micro-op spread estimator was `(max-min)/max`, which
 let one descheduled sample condemn a good measurement (67% spread on a stable
 3 ms op). Now interquartile about the median, with a discarded warm-up — GEMV

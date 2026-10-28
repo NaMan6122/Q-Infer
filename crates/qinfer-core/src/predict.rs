@@ -41,7 +41,7 @@ pub const UNCALIBRATED_SPREAD: f64 = 0.45;
 /// verification pass caught the contradiction.)
 pub const Q8_0_BYTES_PER_ELEMENT: f64 = 1.0625;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShapeClass {
     Dense,
@@ -219,7 +219,7 @@ pub fn mape(cal: &Calibration, observations: &[Observation], bw_gbs: f64) -> f64
 // ---------------------------------------------------------------------------
 
 /// The fields of a model that decide how much KV state a context costs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct KvGeometry {
     pub layers: u32,
     pub kv_heads: u32,

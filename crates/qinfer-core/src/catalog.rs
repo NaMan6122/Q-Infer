@@ -18,12 +18,12 @@
 //!    the plausible default ADR-0002 forbids.
 
 use crate::predict::{KvGeometry, ShapeClass};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const CATALOG_SCHEMA_PREFIX: &str = "qinfer/catalog@";
 pub const SUPPORTED_CATALOG_MAJOR: u32 = 1;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Catalog {
     pub schema: String,
     pub version: String,
@@ -34,7 +34,7 @@ pub struct Catalog {
     pub entries: Vec<CatalogEntry>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CatalogEntry {
     pub id: String,
     pub family: String,
@@ -50,7 +50,7 @@ pub struct CatalogEntry {
     pub quality: Option<Quality>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Artifact {
     pub format: String,
     pub quant: String,
@@ -65,7 +65,7 @@ pub struct Artifact {
     pub publisher: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ByteSource {
     /// We downloaded the file and hashed it.
@@ -76,7 +76,7 @@ pub enum ByteSource {
     Estimated,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelMeta {
     pub total_params: u64,
     pub active_params: u64,
@@ -89,7 +89,7 @@ pub struct ModelMeta {
     pub vocab: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Coverage {
     pub arch_id: String,
     pub backend: String,
@@ -98,7 +98,7 @@ pub struct Coverage {
     pub evidence: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CoverageStatus {
     /// We ran it here and have a measurement.
@@ -107,7 +107,7 @@ pub enum CoverageStatus {
     Declared,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Measurement {
     pub backend: String,
     pub decode_tps: f64,
@@ -117,7 +117,7 @@ pub struct Measurement {
     pub note: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Quality {
     pub metric: String,
     #[serde(default)]
@@ -317,6 +317,43 @@ fn parse_ymd(s: &str) -> Option<(i64, i64, i64)> {
     Some((y, m, d))
 }
 
+impl Catalog {
+    /// Serialise back to the on-disk format.
+    ///
+    /// Measured scores are written **into the catalogue**, not a sidecar file,
+    /// so they are reviewed, diffed and pinned with the artifacts they describe
+    /// (ADR-0004). A sidecar can drift from the catalogue it annotates; a field
+    /// in the same document cannot.
+    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Record a measured quality score for one entry.
+    ///
+    /// Returns `false` for an unknown id rather than creating an entry: silently
+    /// adding one would hide a typo behind a catalogue that looks complete.
+    pub fn record_quality(
+        &mut self,
+        id: &str,
+        metric: &str,
+        value: f64,
+        method: &str,
+    ) -> bool {
+        if !value.is_finite() {
+            return false;
+        }
+        let Some(entry) = self.entries.iter_mut().find(|e| e.id == id) else {
+            return false;
+        };
+        entry.quality = Some(Quality {
+            metric: metric.to_string(),
+            value: Some(value),
+            method: method.to_string(),
+        });
+        true
+    }
+}
+
 /// Howard Hinnant's days_from_civil.
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
@@ -345,6 +382,52 @@ mod tests {
     #[test]
     fn the_shipped_catalogue_is_valid() {
         assert_eq!(seed().validate(), Ok(()));
+    }
+
+    /// A catalogue that cannot be written back cannot hold a measurement, and a
+    /// score in a sidecar file can drift from the artifact it describes.
+    #[test]
+    fn the_catalogue_round_trips_through_json() {
+        let original = seed();
+        let text = original.to_json_pretty().expect("serialise");
+        let reparsed = Catalog::from_json(&text).expect("reparse");
+        assert_eq!(reparsed.entries.len(), original.entries.len());
+        assert_eq!(reparsed.version, original.version);
+        assert_eq!(reparsed.validate(), Ok(()), "a round-tripped catalogue must still be valid");
+        for (a, b) in original.entries.iter().zip(&reparsed.entries) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.artifact.bytes, b.artifact.bytes);
+            assert_eq!(a.artifact.format, b.artifact.format);
+            assert_eq!(a.model.kv, b.model.kv);
+        }
+    }
+
+    #[test]
+    fn a_recorded_score_survives_a_round_trip() {
+        let mut c = seed();
+        assert!(c.record_quality("qwen2.5-3b-q4_k_m", "code_nll", 0.982607, "bench@422tokens"));
+        let text = c.to_json_pretty().expect("serialise");
+        let back = Catalog::from_json(&text).expect("reparse");
+        let e = back.entries.iter().find(|e| e.id == "qwen2.5-3b-q4_k_m").expect("entry");
+        let q = e.quality.as_ref().expect("quality");
+        assert_eq!(q.metric, "code_nll");
+        assert_eq!(q.value, Some(0.982607));
+        assert_eq!(q.method, "bench@422tokens");
+    }
+
+    #[test]
+    fn recording_a_score_for_an_unknown_id_is_refused() {
+        let mut c = seed();
+        let before = c.entries.len();
+        assert!(!c.record_quality("no-such-model", "code_nll", 1.0, "bench"));
+        assert_eq!(c.entries.len(), before, "an unknown id must not create an entry");
+    }
+
+    #[test]
+    fn a_non_finite_score_is_refused() {
+        let mut c = seed();
+        assert!(!c.record_quality("qwen2.5-3b-q4_k_m", "code_nll", f64::NAN, "bench"));
+        assert!(!c.record_quality("qwen2.5-3b-q4_k_m", "code_nll", f64::INFINITY, "bench"));
     }
 
     /// The catalogue's shape matters, not its current size: a test that pins
