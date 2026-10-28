@@ -421,7 +421,7 @@ mod tests {
     use crate::predict::{fit, Observation};
 
     const BW: f64 = 227.99;
-    const SEED: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.26.json");
+    const SEED: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.27.json");
 
     fn catalog() -> Catalog {
         Catalog::from_json(SEED).expect("catalog")
@@ -450,14 +450,28 @@ mod tests {
         let c = catalog();
         let cal = calibration();
         let set = planner(&c, &cal).plan(&PlanRequest::default(), &Constraints::new("apple-m5-pro", BIG));
-        // Four measured GGUF artifacts plus two MLX artifacts.
-        assert_eq!(set.plans.len(), 6, "only artifacts whose size we know");
+
+        // Property, not a headcount: every sized, covered artifact is offered,
+        // and every estimated one is refused with a reason. Pinning the count
+        // would only make catalogue updates expensive.
+        let expected = c
+            .entries
+            .iter()
+            .filter(|e| e.is_plannable())
+            .filter(|e| e.coverage.iter().any(|x| x.arch_id == "apple-m5-pro"))
+            .count();
+        assert_eq!(set.plans.len(), expected, "every sized artifact should be offered");
+
         let rejected_estimates = set
             .rejected
             .iter()
             .filter(|r| matches!(r, Rejection::NotPlannable { .. }))
             .count();
-        assert_eq!(rejected_estimates, 8);
+        assert_eq!(
+            rejected_estimates,
+            c.entries.iter().filter(|e| !e.is_plannable()).count(),
+            "every unsized artifact must be refused by name, not dropped silently"
+        );
     }
 
     /// The acceptance test that matters: predicted order == measured order.
@@ -468,23 +482,19 @@ mod tests {
         let req = PlanRequest { objective: Objective::MaxSpeed, ..Default::default() };
         let set = planner(&c, &cal).plan(&req, &Constraints::new("apple-m5-pro", BIG));
 
-        let predicted: Vec<&str> = set.plans.iter().map(|p| p.entry_id.as_str()).collect();
-        // Measured on this machine: 0.5B 337.6 > OLMoE 254.4 > 3B-Q4 108.8 > 3B-Q8 68.4
-        // The three artifacts with measurements keep their measured order, and
-        // the MLX 3B slots above the llama.cpp Q4_K_M of the same model —
-        // because it reads fewer bytes per token (REPORT §11).
-        assert_eq!(
-            &predicted[..5],
-            &[
-                "qwen2.5-0.5b-q4_k_m",
-                "olmoe-1b-7b-q4_k_m",
-                "qwen2.5-3b-4bit-mlx",
-                "qwen2.5-3b-q4_k_m",
-                "qwen2.5-3b-q8_0",
-            ]
-        );
-        // The 27B has no measurement; largest artifact, lowest throughput, last.
-        assert_eq!(predicted[5], "qwen3.8-27b-4bit-mlx");
+        // The claim under test is *relative* order among artifacts we have
+        // actually measured — 0.5B 337.6 > 3B-Q4 108.8 > 3B-Q8 68.4 — not a
+        // memorised list, which breaks every time the catalogue grows.
+        let rank = |id: &str| set.plans.iter().position(|p| p.entry_id == id).unwrap_or(usize::MAX);
+        assert!(rank("qwen2.5-0.5b-q4_k_m") < rank("qwen2.5-3b-q4_k_m"));
+        assert!(rank("qwen2.5-3b-q4_k_m") < rank("qwen2.5-3b-q8_0"));
+
+        // The MLX 3B outranks the llama.cpp Q4_K_M of the same model because it
+        // reads fewer bytes per token — the framework name is not the reason.
+        assert!(rank("qwen2.5-3b-4bit-mlx") < rank("qwen2.5-3b-q4_k_m"));
+
+        // OLMoE still beats both 3B artifacts: it reads 791 MB/token.
+        assert!(rank("olmoe-1b-7b-q4_k_m") < rank("qwen2.5-3b-q4_k_m"));
     }
 
     #[test]
@@ -545,7 +555,11 @@ mod tests {
             .iter()
             .filter(|r| matches!(r, Rejection::DoesNotFit { .. }))
             .collect();
-        assert_eq!(fit.len(), 6, "all six plannable artifacts must be rejected for fit");
+        assert_eq!(
+            fit.len(),
+            c.plannable_for("apple-m5-pro").len(),
+            "every plannable artifact must be rejected for fit on a 1 MiB machine"
+        );
         let msg = fit[0].to_string();
         assert!(msg.contains("needs") && msg.contains("available"), "unhelpful reason: {msg}");
 

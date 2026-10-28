@@ -10,7 +10,7 @@ use qinfer_core::planner::{Constraints, Objective, PlanRequest, Planner, Rejecti
 use qinfer_core::predict::{fit, Observation, ShapeClass};
 
 const BW_GBS: f64 = 227.99; // measured saturated bandwidth, spikes/m0
-const CATALOG: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.26.json");
+const CATALOG: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.27.json");
 
 fn main() {
     let catalog = Catalog::from_json(CATALOG).expect("catalogue");
