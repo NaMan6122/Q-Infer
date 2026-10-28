@@ -15,7 +15,7 @@ use qinfer_core::{Session, Workspace};
 pub const SCHEMA: &str = "qinfer/cli@1";
 
 /// The catalogue ships with the binary; a network fetch belongs to M1.
-const CATALOG_JSON: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.26.json");
+const CATALOG_JSON: &str = include_str!("../../../catalog/qinfer-catalog-2026.10.27.json");
 
 pub mod exit {
     pub const OK: i32 = 0;
