@@ -12,6 +12,7 @@ A spec may only move `DRAFT → ACTIVE` through G1 (structural validator + Criti
 | Charter | `init-charter.md` | **DRAFT** | v0.1 | PRD, AOP v5 | Human (ratification) |
 | Instruction protocol | `AOP-v5-AutoSuper.md` | **ACTIVE** | v5 (proposal, adopted) | — | Human |
 | Task backlog | `TASKS.md` | **ACTIVE** | v0.1 | Charter | Orchestrator |
+| Roadmap (order & dependency) | `ROADMAP.md` | **ACTIVE** | v1 | PRD, TASKS, milestones | Orchestrator |
 
 ## Decisions
 
